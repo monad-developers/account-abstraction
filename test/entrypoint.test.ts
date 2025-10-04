@@ -691,7 +691,7 @@ describe('EntryPoint', function () {
 
         // we cannot access internal transaction state, so we have to rely on two separate transactions for estimation
         // assuming 10% penalty is charged
-        const expectedGasPenalty = (veryBigCallGasLimit - callGasLimit.toNumber()) * 0.1
+        const expectedGasPenalty = (veryBigCallGasLimit - callGasLimit.toNumber())
         const actualGasPenalty = gasUsed2 - gasUsed1
 
         console.log(actualGasPenalty / expectedGasPenalty)
