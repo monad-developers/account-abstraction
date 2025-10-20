@@ -57,6 +57,22 @@ abstract contract StakeManager is IStakeManager {
     }
 
     /**
+     * Increments an account's deposit.
+     * @param account - The account to increment.
+     * @param amount  - The amount to increment by.
+     * @return the updated deposit of this account
+     */
+    function _decrementDeposit(address account, uint256 amount) internal returns (uint256) {
+        unchecked {
+            DepositInfo storage info = deposits[account];
+            require(info.deposit >= amount, "cannot decrement stake");
+            uint256 newAmount = info.deposit - amount;
+            info.deposit = newAmount;
+            return newAmount;
+        }
+    }
+
+    /**
      * Add to the deposit of the given account.
      * @param account - The account to add to.
      */

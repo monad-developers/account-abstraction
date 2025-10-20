@@ -7,6 +7,7 @@ import "../interfaces/IAccount.sol";
 import "../interfaces/IAccountExecute.sol";
 import "../interfaces/IPaymaster.sol";
 import "../interfaces/IEntryPoint.sol";
+import "../interfaces/ISscOpcodes.sol";
 
 import "../utils/Exec.sol";
 import "./StakeManager.sol";
@@ -28,7 +29,19 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard,
 
     using UserOperationLib for PackedUserOperation;
 
+    int256 constant public SSC_STORAGE_SLOT_COST = 12800000000000000;
+    int256 constant public SSC_STORAGE_SLOT_REFUND = 12672000000000000;
+
+    int256 constant public SSC_ACCOUNT_COST = 12800000000000000;
+    int256 constant public SSC_ACCOUNT_REFUND = 12672000000000000;
+
+    int256 constant public SSC_CODE_CREATED_COST = 12800000000000000;
+
+    uint256 constant public SSC_MAX_SPEND_FACTOR = 10;
+
     SenderCreator private immutable _senderCreator = new SenderCreator();
+
+    ISscOpcodes private immutable _ssc = ISscOpcodes(address(0x665e930982A9a03c844641d453a2C3462ED7Ff41));
 
     function senderCreator() internal view virtual returns (SenderCreator) {
         return _senderCreator;
@@ -174,9 +187,11 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard,
     function handleOps(
         PackedUserOperation[] calldata ops,
         address payable beneficiary
-    ) public nonReentrant {
+    ) public nonReentrant payable {
         uint256 opslen = ops.length;
         UserOpInfo[] memory opInfos = new UserOpInfo[](opslen);
+
+        int256 preSSC = _netSSC();
 
         unchecked {
             for (uint256 i = 0; i < opslen; i++) {
@@ -200,7 +215,12 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard,
                 collected += _executeUserOp(i, ops[i], opInfos[i]);
             }
 
-            _compensate(beneficiary, collected);
+            // this can be negative in cases of refunds
+            int256 netSSC = _netSSC() - preSSC;
+            // In case of negative netSSC msg.value must be higher than abs(netSSC)
+            uint256 sscCompensation = uint256(int256(msg.value) + netSSC);
+
+            _compensate(beneficiary, collected + sscCompensation);
         }
     }
 
@@ -303,6 +323,42 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard,
         uint256 preOpGas;
     }
 
+    function innerExecuteCall(MemoryUserOp memory mUserOp, bytes memory callData) external {
+        require(msg.sender == address(this), "AA92 internal call only");
+
+        int256 preSSC = _netSSC();
+        uint256 callGasLimit = mUserOp.callGasLimit;
+        unchecked {
+            // handleOps was called with gas limit too low. abort entire bundle.
+            if (
+                gasleft() * 63 / 64 <
+                callGasLimit +
+                mUserOp.paymasterPostOpGasLimit +
+                INNER_GAS_OVERHEAD
+            ) {
+                assembly ("memory-safe") {
+                    mstore(0, INNER_OUT_OF_GAS)
+                    revert(0, 32)
+                }
+            }
+        }
+        if (callData.length > 0) {
+            bool success = Exec.call(mUserOp.sender, 0, callData, callGasLimit);
+            if (!success) {
+                require(false, string(Exec.getReturnData(REVERT_REASON_MAX_LEN)));
+            } else {
+                int256 netSSC = _netSSC() - preSSC;
+                if (netSSC < 0) {
+                    // increment deposit for the user's account
+                    _incrementDeposit(mUserOp.sender, uint256(-netSSC));
+                } else {
+                    require(uint256(netSSC) <= SSC_MAX_SPEND_FACTOR * callGasLimit * getUserOpGasPrice(mUserOp), "AA97 ssc max cost violation");
+                    _decrementDeposit(mUserOp.sender, uint256(netSSC));
+                }
+            }
+        }
+    }
+
     /**
      * Inner function to handle a UserOperation.
      * Must be declared "external" to open a call context, but it can only be called by handleOps.
@@ -320,27 +376,12 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard,
         require(msg.sender == address(this), "AA92 internal call only");
         MemoryUserOp memory mUserOp = opInfo.mUserOp;
 
-        uint256 callGasLimit = mUserOp.callGasLimit;
-        unchecked {
-            // handleOps was called with gas limit too low. abort entire bundle.
-            if (
-                gasleft() * 63 / 64 <
-                callGasLimit +
-                mUserOp.paymasterPostOpGasLimit +
-                INNER_GAS_OVERHEAD
-            ) {
-                assembly ("memory-safe") {
-                    mstore(0, INNER_OUT_OF_GAS)
-                    revert(0, 32)
-                }
-            }
-        }
-
         IPaymaster.PostOpMode mode = IPaymaster.PostOpMode.opSucceeded;
         if (callData.length > 0) {
-            bool success = Exec.call(mUserOp.sender, 0, callData, callGasLimit);
+            (bool success, bytes memory result) = address(this).call(
+                abi.encodeWithSelector(this.innerExecuteCall.selector, mUserOp, callData)
+            );
             if (!success) {
-                bytes memory result = Exec.getReturnData(REVERT_REASON_MAX_LEN);
                 if (result.length > 0) {
                     emit UserOperationRevertReason(
                         opInfo.userOpHash,
@@ -411,6 +452,15 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard,
 
             requiredPrefund = requiredGas * mUserOp.maxFeePerGas;
         }
+    }
+
+    /**
+     * Calculates total ssc cost / refund
+     */
+    function _netSSC() internal view returns (int256) {
+        return int256(_ssc.accountsCreated()) * SSC_ACCOUNT_COST - int256(_ssc.accountsCleared()) * SSC_ACCOUNT_REFUND
+            + int256(_ssc.slotsCreated()) * SSC_STORAGE_SLOT_COST - int256(_ssc.slotsCleared()) * SSC_STORAGE_SLOT_REFUND
+            + int256(_ssc.codeCreated()) * SSC_CODE_CREATED_COST;
     }
 
     /**

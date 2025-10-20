@@ -154,7 +154,7 @@ interface IEntryPoint is IStakeManager, INonceManager {
     function handleOps(
         PackedUserOperation[] calldata ops,
         address payable beneficiary
-    ) external;
+    ) external payable;
 
     /**
      * Execute a batch of UserOperation with Aggregators
