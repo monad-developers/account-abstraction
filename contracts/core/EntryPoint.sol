@@ -9,6 +9,7 @@ import "../interfaces/IAccount.sol";
 import "../interfaces/IAccountExecute.sol";
 import "../interfaces/IEntryPoint.sol";
 import "../interfaces/IPaymaster.sol";
+import "../interfaces/IReserveBalance.sol";
 
 import "./UserOperationLib.sol";
 import "./StakeManager.sol";
@@ -43,6 +44,8 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ERC165, EIP712 {
     // Marker for inner call revert on out of gas
     bytes32 private constant INNER_OUT_OF_GAS = hex"deaddead";
     bytes32 private constant INNER_REVERT_LOW_PREFUND = hex"deadaa51";
+    // we pick ba to distinguish from the aa series of revert codes, to avoid confusion with actual prefund-related reverts (e.g. AA31, AA32, AA36)
+    bytes32 private constant INNER_REVERT_DIPPED_INTO_RESERVE = hex"deadba51";
 
     uint256 private constant REVERT_REASON_MAX_LEN = 2048;
     // Penalty charged for either unused execution gas or postOp gas
@@ -59,6 +62,8 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ERC165, EIP712 {
     string constant internal DOMAIN_VERSION = "1";
 
     bytes32 transient private currentUserOpHash;
+
+    address private constant RESERVE_BALANCE = 0x0000000000000000000000000000000000001001;
 
     error Reentrancy();
 
@@ -279,6 +284,13 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ERC165, EIP712 {
                 _emitPrefundTooLow(opInfo);
                 _emitUserOperationEvent(opInfo, false, actualGasCost, actualGas);
                 collected = actualGasCost;
+            } else if (innerRevertCode == INNER_REVERT_DIPPED_INTO_RESERVE) {
+                // innerCall reverted after execution due to reserve-balance violation.
+                uint256 actualGas = preGas - gasleft() + opInfo.preOpGas;
+                uint256 actualGasCost = opInfo.prefund;
+                _emitReserveBalanceViolatedEvent(opInfo);
+                _emitUserOperationEvent(opInfo, false, actualGasCost, actualGas);
+                collected = actualGasCost;
             } else {
                 uint256 freePtr = _getFreePtr();
                 emit PostOpRevertReason(
@@ -327,6 +339,19 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ERC165, EIP712 {
      */
     function _emitPrefundTooLow(UserOpInfo memory opInfo) internal virtual {
         emit UserOperationPrefundTooLow(
+            opInfo.userOpHash,
+            opInfo.mUserOp.sender,
+            opInfo.mUserOp.nonce
+        );
+    }
+
+    /**
+     * Emit the UserOperationReserveBalanceViolated event for the given UserOperation.
+     *
+     * @param opInfo - The details of the current UserOperation.
+     */
+    function _emitReserveBalanceViolatedEvent(UserOpInfo memory opInfo) internal virtual {
+        emit UserOperationReserveBalanceViolated(
             opInfo.userOpHash,
             opInfo.mUserOp.sender,
             opInfo.mUserOp.nonce
@@ -444,10 +469,27 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ERC165, EIP712 {
             }
         }
 
+        if (mode == IPaymaster.PostOpMode.opSucceeded && _dippedIntoReserve()) {
+            assembly ("memory-safe") {
+                mstore(0, INNER_REVERT_DIPPED_INTO_RESERVE)
+                revert(0, 32)
+            }
+        }
+
         unchecked {
             uint256 actualGas = preGas - gasleft() + opInfo.preOpGas;
             return _postExecution(mode, opInfo, context, actualGas);
         }
+    }
+
+    function _dippedIntoReserve() internal returns (bool dipped) {
+        (bool success, bytes memory ret) = RESERVE_BALANCE.call(
+            abi.encodeWithSelector(IReserveBalance.dippedIntoReserve.selector)
+        );
+        if (!success || ret.length != 32) {
+            return false;
+        }
+        dipped = abi.decode(ret, (bool));
     }
 
     /**

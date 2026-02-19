@@ -115,6 +115,18 @@ interface IEntryPoint is IStakeManager, INonceManager {
     );
 
     /**
+     * UserOp violated reserve balance constraints. The UserOperation is reverted, and no refund is made.
+     * @param userOpHash   - The request unique identifier.
+     * @param sender       - The sender of this request.
+     * @param nonce        - The nonce used in the request.
+     */
+    event UserOperationReserveBalanceViolated(
+        bytes32 indexed userOpHash,
+        address indexed sender,
+        uint256 nonce
+    );
+
+    /**
      * An event emitted by handleOps() and handleAggregatedOps(), before starting the execution loop.
      * Any event emitted before this event, is part of the validation.
      */
