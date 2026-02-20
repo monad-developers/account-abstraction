@@ -487,7 +487,7 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ERC165, EIP712 {
             abi.encodeWithSelector(IReserveBalance.dippedIntoReserve.selector)
         );
         if (!success || ret.length != 32) {
-            return false;
+            return true;
         }
         dipped = abi.decode(ret, (bool));
     }

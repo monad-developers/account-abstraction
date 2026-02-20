@@ -69,6 +69,12 @@ describe('EntryPoint EIP-7702 tests', function () {
     before(async function () {
       this.timeout(20000)
       chainId = await ethers.provider.getNetwork().then(net => net.chainId)
+
+      const reservePrecompile = '0x0000000000000000000000000000000000001001'
+      const returnFalseCode = '0x600060005260206000F3'
+
+      // assume reserve balance introspection is valid
+      await ethers.provider.send('hardhat_setCode', [reservePrecompile, returnFalseCode])
       entryPoint = await deployEntryPoint()
     })
 
