@@ -98,6 +98,12 @@ describe('EntryPoint', function () {
 
     chainId = await ethers.provider.getNetwork().then(net => net.chainId)
 
+    const reservePrecompile = '0x0000000000000000000000000000000000001001'
+    const returnFalseCode = '0x600060005260206000F3'
+
+    // assume reserve balance introspection is valid
+    await ethers.provider.send('hardhat_setCode', [reservePrecompile, returnFalseCode])
+
     entryPoint = await deployEntryPoint()
 
     accountOwner = createAccountOwner();
@@ -484,6 +490,56 @@ describe('EntryPoint', function () {
         }, wrongOwner, entryPoint)
         const beneficiaryAddress = createAddress()
         await expect(entryPoint.estimateGas.handleOps([op], beneficiaryAddress)).to.revertedWith('AA24 signature error')
+      })
+
+      describe('reserve balance precompile introspection', () => {
+        const reservePrecompile = '0x0000000000000000000000000000000000001001'
+        const returnTrueCode = '0x600160005260206000F3'
+
+        async function createCountOp (): Promise<PackedUserOperation> {
+          const count = await counter.populateTransaction.count()
+          const callData = (await simpleAccount.populateTransaction.execute(counter.address, 0, count.data!)).data
+          return await fillSignAndPack({
+            sender: simpleAccount.address,
+            callData,
+            verificationGasLimit: 1e6,
+            callGasLimit: 1e6
+          }, accountOwner, entryPoint)
+        }
+
+        it('should succeed when reserve balance precompile returns false', async () => {
+          const beneficiaryAddress = createAddress()
+          const op = await createCountOp()
+          const countBefore = await counter.counters(simpleAccount.address)
+
+          const tx = await entryPoint.handleOps([op], beneficiaryAddress, {
+            maxFeePerGas: 1e9,
+            gasLimit: 1e7
+          })
+          const rcpt = await tx.wait()
+          const userOpEvent = rcpt.events?.find(e => e.event === 'UserOperationEvent') as UserOperationEventEvent
+
+          expect(userOpEvent.args.success).to.equal(true)
+          expect(await counter.counters(simpleAccount.address)).to.equal(countBefore.add(1))
+        })
+
+        it('should revert userOp execution when reserve balance precompile returns true', async () => {
+          await ethers.provider.send('hardhat_setCode', [reservePrecompile, returnTrueCode])
+
+          const beneficiaryAddress = createAddress()
+          const op = await createCountOp()
+          const countBefore = await counter.counters(simpleAccount.address)
+
+          const tx = await entryPoint.handleOps([op], beneficiaryAddress, {
+            maxFeePerGas: 1e9,
+            gasLimit: 1e7
+          })
+          const rcpt = await tx.wait()
+          const userOpEvent = rcpt.events?.find(e => e.event === 'UserOperationEvent') as UserOperationEventEvent
+
+          expect(userOpEvent.args.success).to.equal(false)
+          expect(await counter.counters(simpleAccount.address)).to.equal(countBefore)
+        })
       })
 
       describe('should pay prefund and revert account if prefund is not enough', function () {
