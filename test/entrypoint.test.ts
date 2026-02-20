@@ -495,6 +495,15 @@ describe('EntryPoint', function () {
       describe('reserve balance precompile introspection', () => {
         const reservePrecompile = '0x0000000000000000000000000000000000001001'
         const returnTrueCode = '0x600160005260206000F3'
+        let snapshot: string
+
+        beforeEach(async () => {
+          snapshot = await ethers.provider.send('evm_snapshot', [])
+        })
+
+        afterEach(async () => {
+          await ethers.provider.send('evm_revert', [snapshot])
+        })
 
         async function createCountOp (): Promise<PackedUserOperation> {
           const count = await counter.populateTransaction.count()
