@@ -277,7 +277,10 @@ describe('EntryPoint EIP-7702 tests', function () {
           const receipt = await tx.wait()
 
           const userOpEvent = (receipt.events ?? []).find(event => event.event === 'UserOperationEvent')
+          const rbViolationEvents = (receipt.events ?? []).filter(event => event.event === 'UserOperationReserveBalanceViolated')
           expect(userOpEvent).to.not.be.undefined
+          expect(rbViolationEvents.length).to.equal(1)
+          expect(rbViolationEvents[0].args?.sender.toLowerCase()).to.equal(eoa.address.toLowerCase())
           expect(Boolean(userOpEvent!.args?.success)).to.equal(false)
           expect(await counter.counters(eoa.address)).to.equal(countBefore)
         })
@@ -309,7 +312,12 @@ describe('EntryPoint EIP-7702 tests', function () {
           const receipt = await tx.wait()
 
           const userOpEvents = (receipt.events ?? []).filter(event => event.event === 'UserOperationEvent')
+          const rbViolationEvents = (receipt.events ?? []).filter(event => event.event === 'UserOperationReserveBalanceViolated')
           expect(userOpEvents.length).to.equal(2)
+          expect(rbViolationEvents.length).to.equal(2)
+          const rbViolationSenders = rbViolationEvents.map(event => String(event.args?.sender).toLowerCase())
+          expect(rbViolationSenders).to.include(eoa.address.toLowerCase())
+          expect(rbViolationSenders).to.include(smartAccount.toLowerCase())
           expect(Boolean(userOpEvents[0].args?.success)).to.equal(false)
           expect(Boolean(userOpEvents[1].args?.success)).to.equal(false)
           expect(await counter.counters(eoa.address)).to.equal(eoaCountBefore)
