@@ -544,8 +544,10 @@ describe('EntryPoint', function () {
             gasLimit: 1e7
           })
           const rcpt = await tx.wait()
+          const reserveBalanceViolatedEvent = rcpt.events?.find(e => e.event === 'UserOperationReserveBalanceViolated')
           const userOpEvent = rcpt.events?.find(e => e.event === 'UserOperationEvent') as UserOperationEventEvent
 
+          expect(reserveBalanceViolatedEvent?.event).to.equal('UserOperationReserveBalanceViolated')
           expect(userOpEvent.args.success).to.equal(false)
           expect(await counter.counters(simpleAccount.address)).to.equal(countBefore)
         })
