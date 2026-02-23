@@ -285,7 +285,7 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ERC165, EIP712 {
                 _emitUserOperationEvent(opInfo, false, actualGasCost, actualGas);
                 collected = actualGasCost;
             } else if (innerRevertCode == INNER_REVERT_DIPPED_INTO_RESERVE) {
-                // innerCall reverted after execution due to reserve-balance violation.
+                // innerCall reverted after execution due to reserve balance violation.
                 uint256 actualGas = preGas - gasleft() + opInfo.preOpGas;
                 uint256 actualGasCost = opInfo.prefund;
                 _emitReserveBalanceViolatedEvent(opInfo);
@@ -469,7 +469,8 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ERC165, EIP712 {
             }
         }
 
-        if (mode == IPaymaster.PostOpMode.opSucceeded && _dippedIntoReserve()) {
+        if (_dippedIntoReserve()) {
+            // if a userop dips into the reserve balance, abort bundle exec
             assembly ("memory-safe") {
                 mstore(0, INNER_REVERT_DIPPED_INTO_RESERVE)
                 revert(0, 32)
