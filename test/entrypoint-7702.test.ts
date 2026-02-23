@@ -42,7 +42,7 @@ import {
   signEip7702Authorization,
   signEip7702RawTransaction
 } from './eip7702helpers'
-import { UserOperation } from './UserOperation'
+import { PackedUserOperation, UserOperation } from './UserOperation'
 
 async function sleep (number: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, number))
@@ -206,7 +206,7 @@ describe('EntryPoint EIP-7702 tests', function () {
           await ethers.provider.send('evm_revert', [snapshot])
         })
 
-        async function createCountOp () {
+        async function createCountOp (): Promise<PackedUserOperation> {
           // simulate 7702 account by deploying the delegate code to the EOA address
           const delegateCode = await ethers.provider.getCode(delegate.address)
           await ethers.provider.send('hardhat_setCode', [eoa.address, delegateCode])
@@ -224,7 +224,7 @@ describe('EntryPoint EIP-7702 tests', function () {
           }, eoa, ep)
         }
 
-        async function createCountOps () {
+        async function createCountOps (): Promise<PackedUserOperation[]> {
           const delegateCode = await ethers.provider.getCode(delegate.address)
           await ethers.provider.send('hardhat_setCode', [eoa.address, delegateCode])
           const countCall = counter.interface.encodeFunctionData('count')
