@@ -483,6 +483,11 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ERC165, EIP712 {
         }
     }
 
+    /**
+     * Check if the reserve balance was dipped into by making a call to the reserve balance precompile.
+     * If the call fails or returns an invalid value, we assume the worst and treat it as if the reserve balance was dipped into.
+     * @dev The precompile only supports CALL on this specific selector
+     */
     function _dippedIntoReserve() internal returns (bool dipped) {
         (bool success, bytes memory ret) = RESERVE_BALANCE.call(
             abi.encodeWithSelector(IReserveBalance.dippedIntoReserve.selector)
