@@ -272,7 +272,7 @@ export class GasChecker {
     }
     const rcpt = await ret.wait()
     const gasUsed = rcpt.gasUsed.toNumber()
-    const countSuccessOps = rcpt.events?.filter(e => e.event === 'UserOperationEvent' && e.args?.success).length ?? 0
+    const countSuccessOps = rcpt.events?.filter(e => e.event === 'UserOperationEvent' && e.args?.success === true).length ?? 0
     const reserveViolationEvents = rcpt.events?.filter(e => e.event === 'UserOperationReserveBalanceViolated').length ?? 0
 
     rcpt.events?.filter(e => e.event?.match(/PostOpRevertReason|UserOperationRevertReason/)).find(e => {
@@ -280,7 +280,7 @@ export class GasChecker {
     })
     // check for failure with no revert reason (e.g. OOG)
     const failedOps = userOps.length - countSuccessOps
-    if (!(failedOps > 0 && !GasCheckCollector.inst.reservePrecompileForcedFalse && reserveViolationEvents === failedOps)) {
+    if (!(failedOps > 0 && !GasCheckCollector.inst.isReserveBalancePrecompileSimulated && reserveViolationEvents === failedOps)) {
       expect(countSuccessOps).to.eq(userOps.length, 'Some UserOps failed to execute (with no revert reason)')
     } else {
       debug(`reserve precompile violations detected on ${failedOps}/${userOps.length} ops; continuing gascalc on this network`)
@@ -326,7 +326,7 @@ export class GasCheckCollector {
   static initPromise?: Promise<GasCheckCollector>
 
   entryPoint: EntryPoint
-  isReserveBalancePrecompileSimulated= false
+  isReserveBalancePrecompileSimulated = false
 
   static async init (): Promise<void> {
     if (this.inst == null) {
