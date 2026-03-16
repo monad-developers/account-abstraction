@@ -46,9 +46,9 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ERC165, EIP712 {
 
     uint256 private constant REVERT_REASON_MAX_LEN = 2048;
     // Penalty charged for either unused execution gas or postOp gas
-    uint256 private constant UNUSED_GAS_PENALTY_PERCENT = 10;
+    uint256 private constant UNUSED_GAS_PENALTY_PERCENT = 100;
     // Threshold below which no penalty would be charged
-    uint256 private constant PENALTY_GAS_THRESHOLD = 40000;
+    uint256 private constant PENALTY_GAS_THRESHOLD = 0;
 
     uint48 private constant VALIDITY_BLOCK_RANGE_FLAG = 0x800000000000;
     uint48 private constant VALIDITY_BLOCK_RANGE_MASK = 0x7fffffffffff;

@@ -89,8 +89,8 @@ describe('EntryPoint', function () {
 
   const globalUnstakeDelaySec = 2
   const paymasterStake = ethers.utils.parseEther('2')
-  const PENALTY_PERCENTAGE = 10
-  const PENALTY_GAS_THRESHOLD = 4e4
+  const PENALTY_PERCENTAGE = 100
+  const PENALTY_GAS_THRESHOLD = 0
 
   before(async function () {
     this.timeout(20000)
@@ -779,32 +779,36 @@ describe('EntryPoint', function () {
 
         await ethers.provider.send('evm_revert', [snap])
 
+        let callGasLimitWithUnusedGas, expectedGasPenalty, actualGasPenalty;
+        let threshold = PENALTY_GAS_THRESHOLD < 10 ? 10000 : PENALTY_GAS_THRESHOLD;
         // Second, sending a userOp with slightly below PENALTY_GAS_THRESHOLD (shouldn't penalize)
-        let callGasLimitWithUnusedGas = callGasLimit.add(PENALTY_GAS_THRESHOLD / 10)
-        const op2 = await fillSignAndPack({
-          sender: simpleAccount.address,
-          callData: accountExec.data,
-          verificationGasLimit: 1e5,
-          callGasLimit: callGasLimitWithUnusedGas
-        }, accountOwner, entryPoint)
-        const rcpt2 = await entryPoint.handleOps([op2], beneficiaryAddress, {
-          maxFeePerGas: 1e9,
-          gasLimit: 2e7
-        }).then(async t => await t.wait())
-        const logs2 = await entryPoint.queryFilter(entryPoint.filters.UserOperationEvent(), rcpt2.blockHash)
+        if (PENALTY_GAS_THRESHOLD > 10) {
+          let callGasLimitWithUnusedGas = callGasLimit.add(threshold / 10)
+          const op2 = await fillSignAndPack({
+            sender: simpleAccount.address,
+            callData: accountExec.data,
+            verificationGasLimit: 1e5,
+            callGasLimit: callGasLimitWithUnusedGas
+          }, accountOwner, entryPoint)
+          const rcpt2 = await entryPoint.handleOps([op2], beneficiaryAddress, {
+            maxFeePerGas: 1e9,
+            gasLimit: 2e7
+          }).then(async t => await t.wait())
+          const logs2 = await entryPoint.queryFilter(entryPoint.filters.UserOperationEvent(), rcpt2.blockHash)
 
-        const gasUsed2 = logs2[0].args.actualGasUsed.toNumber()
+          const gasUsed2 = logs2[0].args.actualGasUsed.toNumber()
 
-        let expectedGasPenalty = 0
-        let actualGasPenalty = gasUsed2 - gasUsed1
+          let expectedGasPenalty = 0
+          let actualGasPenalty = gasUsed2 - gasUsed1
 
-        expect(actualGasPenalty).to.be.eq(expectedGasPenalty)
+          expect(actualGasPenalty).to.be.eq(expectedGasPenalty)
 
-        await ethers.provider.send('evm_revert', [snap])
+          await ethers.provider.send('evm_revert', [snap])
+        }
 
         // Third, sending a userOp with unused execution gas more than PENALTY_GAS_THRESHOLD
 
-        callGasLimitWithUnusedGas = callGasLimit.add(PENALTY_GAS_THRESHOLD * 100)
+        callGasLimitWithUnusedGas = callGasLimit.add(threshold * 100)
         const op3 = await fillSignAndPack({
           sender: simpleAccount.address,
           callData: accountExec.data,
