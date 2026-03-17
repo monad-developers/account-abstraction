@@ -6,8 +6,13 @@ import { Wallet } from 'ethers'
 import { toChecksumAddress } from 'ethereumjs-util'
 import {
   EntryPoint,
+  SimpleAccount__factory,
   TestEip7702DelegateAccount,
   TestEip7702DelegateAccount__factory,
+  TestCounter,
+  TestCounter__factory,
+  TestExecAccountFactory,
+  TestExecAccountFactory__factory,
   TestUtil,
   TestUtil__factory
 } from '../typechain'
@@ -37,7 +42,7 @@ import {
   signEip7702Authorization,
   signEip7702RawTransaction
 } from './eip7702helpers'
-import { UserOperation } from './UserOperation'
+import { PackedUserOperation, UserOperation } from './UserOperation'
 
 async function sleep (number: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, number))
@@ -69,6 +74,12 @@ describe('EntryPoint EIP-7702 tests', function () {
     before(async function () {
       this.timeout(20000)
       chainId = await ethers.provider.getNetwork().then(net => net.chainId)
+
+      const reservePrecompile = '0x0000000000000000000000000000000000001001'
+      const returnFalseCode = '0x600060005260206000F3'
+
+      // assume reserve balance introspection is valid
+      await ethers.provider.send('hardhat_setCode', [reservePrecompile, returnFalseCode])
       entryPoint = await deployEntryPoint()
     })
 
@@ -159,6 +170,161 @@ describe('EntryPoint EIP-7702 tests', function () {
         })).to.be.rejectedWith(`Eip7702SenderNotDelegate(${toChecksumAddress(op1.sender)})`)
       })
 
+      describe('reserve balance precompile introspection', () => {
+        const reservePrecompile = '0x0000000000000000000000000000000000001001'
+        const alwaysFalseCode = '0x600060005260206000F3'
+        const alwaysTrueCode = '0x600160005260206000F3'
+        const beneficiary = createAddress()
+
+        let ep: EntryPoint
+        let delegate: TestEip7702DelegateAccount
+        let counter: TestCounter
+        let eoa: Wallet
+        let smartOwner: Wallet
+        let testExecFactory: TestExecAccountFactory
+        let smartAccount: string
+        let snapshot: string
+
+        before(async () => {
+          ep = await deployEntryPoint()
+          delegate = await new TestEip7702DelegateAccount__factory(ethersSigner).deploy(ep.address)
+          counter = await new TestCounter__factory(ethersSigner).deploy()
+          testExecFactory = await new TestExecAccountFactory__factory(ethersSigner).deploy(ep.address)
+          eoa = createAccountOwner()
+          smartOwner = createAccountOwner()
+          await testExecFactory.createAccount(smartOwner.address, 0)
+          smartAccount = await testExecFactory.getAddress(smartOwner.address, 0)
+          await ethersSigner.sendTransaction({ to: eoa.address, value: parseEther('10') })
+          await ethersSigner.sendTransaction({ to: smartAccount, value: parseEther('10') })
+        })
+
+        beforeEach(async () => {
+          snapshot = await ethers.provider.send('evm_snapshot', [])
+        })
+
+        afterEach(async () => {
+          await ethers.provider.send('evm_revert', [snapshot])
+        })
+
+        async function createCountOp (): Promise<PackedUserOperation> {
+          // simulate 7702 account by deploying the delegate code to the EOA address
+          const delegateCode = await ethers.provider.getCode(delegate.address)
+          await ethers.provider.send('hardhat_setCode', [eoa.address, delegateCode])
+          const countCall = counter.interface.encodeFunctionData('count')
+          const callData = delegate.interface.encodeFunctionData('execute', [counter.address, 0, countCall])
+
+          return await fillSignAndPack({
+            sender: eoa.address,
+            nonce: await ep.getNonce(eoa.address, 0),
+            callData,
+            verificationGasLimit: 1e6,
+            callGasLimit: 1e6,
+            maxFeePerGas: 1,
+            maxPriorityFeePerGas: 1
+          }, eoa, ep)
+        }
+
+        async function createCountOps (): Promise<PackedUserOperation[]> {
+          const delegateCode = await ethers.provider.getCode(delegate.address)
+          await ethers.provider.send('hardhat_setCode', [eoa.address, delegateCode])
+          const countCall = counter.interface.encodeFunctionData('count')
+          const calldata7702Account = delegate.interface.encodeFunctionData('execute', [counter.address, 0, countCall])
+          const calldataSmartWallet = SimpleAccount__factory.createInterface().encodeFunctionData('execute', [counter.address, 0, countCall])
+
+          const eip7702Op = await fillSignAndPack({
+            sender: eoa.address,
+            nonce: await ep.getNonce(eoa.address, 0),
+            callData: calldata7702Account,
+            verificationGasLimit: 1e6,
+            callGasLimit: 1e6,
+            maxFeePerGas: 1,
+            maxPriorityFeePerGas: 1
+          }, eoa, ep)
+
+          const smartOp = await fillSignAndPack({
+            sender: smartAccount,
+            nonce: await ep.getNonce(smartAccount, 0),
+            callData: calldataSmartWallet,
+            verificationGasLimit: 1e6,
+            callGasLimit: 1e6,
+            maxFeePerGas: 1,
+            maxPriorityFeePerGas: 1
+          }, smartOwner, ep)
+
+          return [eip7702Op, smartOp]
+        }
+
+        it('should succeed when reserve balance precompile returns false', async () => {
+          await ethers.provider.send('hardhat_setCode', [reservePrecompile, alwaysFalseCode])
+          const op = await createCountOp()
+          const countBefore = await counter.counters(eoa.address)
+
+          const tx = await ep.handleOps([op], beneficiary, { gasLimit: 2e7, maxFeePerGas: 1e9 })
+          const receipt = await tx.wait()
+
+          const userOpEvent = (receipt.events ?? []).find(event => event.event === 'UserOperationEvent')
+          expect(userOpEvent).to.not.be.undefined
+          expect(Boolean(userOpEvent!.args?.success)).to.equal(true)
+          expect(await counter.counters(eoa.address)).to.equal(countBefore.add(1))
+        })
+
+        it('should revert userOp execution when reserve balance precompile returns true', async () => {
+          await ethers.provider.send('hardhat_setCode', [reservePrecompile, alwaysTrueCode])
+          const op = await createCountOp()
+          const countBefore = await counter.counters(eoa.address)
+
+          const tx = await ep.handleOps([op], beneficiary, { gasLimit: 2e7, maxFeePerGas: 1e9 })
+          const receipt = await tx.wait()
+
+          const userOpEvent = (receipt.events ?? []).find(event => event.event === 'UserOperationEvent')
+          const rbViolationEvents = (receipt.events ?? []).filter(event => event.event === 'UserOperationReserveBalanceViolated')
+          expect(userOpEvent).to.not.be.undefined
+          expect(rbViolationEvents.length).to.equal(1)
+          expect(rbViolationEvents[0].args?.sender.toLowerCase()).to.equal(eoa.address.toLowerCase())
+          expect(Boolean(userOpEvent!.args?.success)).to.equal(false)
+          expect(await counter.counters(eoa.address)).to.equal(countBefore)
+        })
+
+        it('should succeed handleOps with 7702 and smart wallet ops when reserve balance precompile returns false', async () => {
+          await ethers.provider.send('hardhat_setCode', [reservePrecompile, alwaysFalseCode])
+          const [eip7702Op, smartOp] = await createCountOps()
+          const eoaCountBefore = await counter.counters(eoa.address)
+          const smartCountBefore = await counter.counters(smartAccount)
+
+          const tx = await ep.handleOps([eip7702Op, smartOp], beneficiary, { gasLimit: 2e7, maxFeePerGas: 1e9 })
+          const receipt = await tx.wait()
+
+          const userOpEvents = (receipt.events ?? []).filter(event => event.event === 'UserOperationEvent')
+          expect(userOpEvents.length).to.equal(2)
+          expect(Boolean(userOpEvents[0].args?.success)).to.equal(true)
+          expect(Boolean(userOpEvents[1].args?.success)).to.equal(true)
+          expect(await counter.counters(eoa.address)).to.equal(eoaCountBefore.add(1))
+          expect(await counter.counters(smartAccount)).to.equal(smartCountBefore.add(1))
+        })
+
+        it('should revert userOp execution for 7702 and smart wallet ops when reserve balance precompile returns true', async () => {
+          await ethers.provider.send('hardhat_setCode', [reservePrecompile, alwaysTrueCode])
+          const [eip7702Op, smartOp] = await createCountOps()
+          const eoaCountBefore = await counter.counters(eoa.address)
+          const smartCountBefore = await counter.counters(smartAccount)
+
+          const tx = await ep.handleOps([eip7702Op, smartOp], beneficiary, { gasLimit: 2e7, maxFeePerGas: 1e9 })
+          const receipt = await tx.wait()
+
+          const userOpEvents = (receipt.events ?? []).filter(event => event.event === 'UserOperationEvent')
+          const rbViolationEvents = (receipt.events ?? []).filter(event => event.event === 'UserOperationReserveBalanceViolated')
+          expect(userOpEvents.length).to.equal(2)
+          expect(rbViolationEvents.length).to.equal(2)
+          const rbViolationSenders = rbViolationEvents.map(event => String(event.args?.sender).toLowerCase())
+          expect(rbViolationSenders).to.include(eoa.address.toLowerCase())
+          expect(rbViolationSenders).to.include(smartAccount.toLowerCase())
+          expect(Boolean(userOpEvents[0].args?.success)).to.equal(false)
+          expect(Boolean(userOpEvents[1].args?.success)).to.equal(false)
+          expect(await counter.counters(eoa.address)).to.equal(eoaCountBefore)
+          expect(await counter.counters(smartAccount)).to.equal(smartCountBefore)
+        })
+      })
+
       describe('test with geth', () => {
         // can't deploy coverage "entrypoint" on geth (contract too large)
         if (process.env.COVERAGE != null) {
@@ -179,6 +345,7 @@ describe('EntryPoint EIP-7702 tests', function () {
           eoa = createAccountOwner(geth.provider)
           bundler = createAccountOwner(geth.provider)
           entryPoint = await deployEntryPoint(geth.provider)
+
           delegate = await new TestEip7702DelegateAccount__factory(geth.provider.getSigner()).deploy(entryPoint.address)
           console.log('\tdelegate addr=', delegate.address, 'len=', await geth.provider.getCode(delegate.address).then(code => code.length))
           await geth.sendTx({ to: eoa.address, value: gethHex(parseEther('1')) })
