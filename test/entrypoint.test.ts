@@ -779,11 +779,10 @@ describe('EntryPoint', function () {
 
         await ethers.provider.send('evm_revert', [snap])
 
-        let callGasLimitWithUnusedGas, expectedGasPenalty, actualGasPenalty;
-        let threshold = PENALTY_GAS_THRESHOLD < 10 ? 10000 : PENALTY_GAS_THRESHOLD;
+        const threshold = PENALTY_GAS_THRESHOLD < 10 ? 10000 : PENALTY_GAS_THRESHOLD
         // Second, sending a userOp with slightly below PENALTY_GAS_THRESHOLD (shouldn't penalize)
         if (PENALTY_GAS_THRESHOLD > 10) {
-          let callGasLimitWithUnusedGas = callGasLimit.add(threshold / 10)
+          const callGasLimitWithUnusedGas = callGasLimit.add(threshold / 10)
           const op2 = await fillSignAndPack({
             sender: simpleAccount.address,
             callData: accountExec.data,
@@ -798,8 +797,8 @@ describe('EntryPoint', function () {
 
           const gasUsed2 = logs2[0].args.actualGasUsed.toNumber()
 
-          let expectedGasPenalty = 0
-          let actualGasPenalty = gasUsed2 - gasUsed1
+          const expectedGasPenalty = 0
+          const actualGasPenalty = gasUsed2 - gasUsed1
 
           expect(actualGasPenalty).to.be.eq(expectedGasPenalty)
 
@@ -808,7 +807,7 @@ describe('EntryPoint', function () {
 
         // Third, sending a userOp with unused execution gas more than PENALTY_GAS_THRESHOLD
 
-        callGasLimitWithUnusedGas = callGasLimit.add(threshold * 100)
+        const callGasLimitWithUnusedGas = callGasLimit.add(threshold * 100)
         const op3 = await fillSignAndPack({
           sender: simpleAccount.address,
           callData: accountExec.data,
@@ -823,8 +822,8 @@ describe('EntryPoint', function () {
 
         const gasUsed3 = logs3[0].args.actualGasUsed.toNumber()
 
-        expectedGasPenalty = (callGasLimitWithUnusedGas.toNumber() - callGasLimit.toNumber()) * PENALTY_PERCENTAGE / 100
-        actualGasPenalty = gasUsed3 - gasUsed1
+        const expectedGasPenalty = (callGasLimitWithUnusedGas.toNumber() - callGasLimit.toNumber()) * PENALTY_PERCENTAGE / 100
+        const actualGasPenalty = gasUsed3 - gasUsed1
 
         expect(actualGasPenalty).to.be.closeTo(expectedGasPenalty, expectedGasPenalty * 0.01)
       })
