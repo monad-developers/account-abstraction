@@ -5,7 +5,7 @@ import {
   TestExecAccount__factory,
   TestExecAccountFactory__factory
 } from '../typechain'
-import { createAccountOwner, deployEntryPoint, fund } from './testutils'
+import { createAccountOwner, deployEntryPoint, fund, setDippedIntoReserve } from './testutils'
 import { fillSignAndPack } from './UserOp'
 import { Signer, Wallet } from 'ethers'
 import { ethers } from 'hardhat'
@@ -20,6 +20,7 @@ describe('IAccountExecute', () => {
   before(async () => {
     const provider = ethers.provider
     ethersSigner = provider.getSigner()
+    await setDippedIntoReserve(false)
     entryPoint = await deployEntryPoint()
     const factory = await new TestExecAccountFactory__factory(ethersSigner).deploy(entryPoint.address)
     owner = createAccountOwner()

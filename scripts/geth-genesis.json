@@ -1,0 +1,36 @@
+{
+  "config": {
+    "chainId": 1337,
+    "homesteadBlock": 0,
+    "eip150Block": 0,
+    "eip155Block": 0,
+    "eip158Block": 0,
+    "byzantiumBlock": 0,
+    "constantinopleBlock": 0,
+    "petersburgBlock": 0,
+    "istanbulBlock": 0,
+    "berlinBlock": 0,
+    "londonBlock": 0,
+    "terminalTotalDifficulty": 0,
+    "shanghaiTime": 0,
+    "cancunTime": 0,
+    "pragueTime": 0,
+    "blobSchedule": {
+      "cancun": { "target": 3, "max": 6, "baseFeeUpdateFraction": 3338477 },
+      "prague": { "target": 6, "max": 9, "baseFeeUpdateFraction": 5007716 }
+    }
+  },
+  "difficulty": "0",
+  "gasLimit": "30000000",
+  "alloc": {
+    "0x0000000000000000000000000000000000001001": {
+      "comment": "stub for the Monad reserve-balance precompile: returns false (see IReserveBalance)",
+      "code": "0x600060005260206000f3",
+      "balance": "0"
+    },
+    "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266": {
+      "comment": "the dev key imported by scripts/geth.sh. a custom genesis replaces the alloc --dev would have pre-funded",
+      "balance": "0x21e19e0c9bab2400000"
+    }
+  }
+}

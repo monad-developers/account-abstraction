@@ -16,8 +16,18 @@ services:
     ports: [ '8545:8545' ]
     image: ethereum/client-go:release-1.14
     # image: dtr22/geth7702
-    command: |
-          --verbosity 1
-          --http -http.addr 0.0.0.0 --http.api 'eth,net,web3,debug' --http.port 8545 
-          --http.vhosts '*,localhost,host.docker.internal'
-          --dev --rpc.allow-unprotected-txs 
+    # same genesis and dev-key import as scripts/geth.sh, see the comment there
+    volumes:
+      - ./geth-genesis.json:/genesis.json:ro
+    entrypoint: sh
+    command:
+      - -c
+      - >
+        echo ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 > /key.txt &&
+        : > /pw.txt &&
+        geth --lightkdf --datadir /d account import --password /pw.txt /key.txt > /dev/null 2>&1 &&
+        geth --datadir /d init /genesis.json &&
+        exec geth --lightkdf --datadir /d --verbosity 1
+        --http --http.addr 0.0.0.0 --http.api 'eth,net,web3,debug' --http.port 8545
+        --http.vhosts '*,localhost,host.docker.internal'
+        --dev --rpc.allow-unprotected-txs
