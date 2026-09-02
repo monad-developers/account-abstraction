@@ -7,7 +7,7 @@ import 'solidity-coverage'
 
 import * as fs from 'fs'
 
-const SALT = '0xc5322280eebcac668861dbee1cc4c934363fb859d18eeb6247964ff764461bef'
+const SALT = '0x84759d6302d4cfbc379cbf5e080a6a0db50ef8782a59586a025bd00aa81aafa2'
 process.env.SALT = process.env.SALT ?? SALT
 
 task('deploy', 'Deploy contracts')
