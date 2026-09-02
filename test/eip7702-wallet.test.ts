@@ -88,7 +88,8 @@ describe('Simple7702Account.sol', function () {
       sender: eoa.address,
       initCode: INITCODE_EIP7702_MARKER,
       nonce: 0,
-      callData
+      callData,
+      callGasLimit: 1e5
     }, eoa, entryPoint, { eip7702delegate: eip7702delegate.address })
 
     await geth.sendTx({ to: eoa.address, value: parseEther('1') })
@@ -106,7 +107,8 @@ describe('Simple7702Account.sol', function () {
       to: entryPoint.address,
       data: handleOps
     }
-    await geth.sendTx(tx)
+    await expectUserOpToSucceed(await geth.sendTx(tx))
+    expect(await geth.provider.getBalance(addr1)).to.equal(1)
   })
 
   it('should use EntryPoint with paymaster', async () => {
@@ -120,9 +122,12 @@ describe('Simple7702Account.sol', function () {
       paymaster: paymaster.address,
       initCode: INITCODE_EIP7702_MARKER,
       nonce: 0,
-      callData
+      callData,
+      callGasLimit: 1e5
     }, eoa, entryPoint, { eip7702delegate: eip7702delegate.address })
 
+    // the paymaster covers gas, but the account still needs the wei it is about to transfer
+    await geth.sendTx({ to: eoa.address, value: 1000 })
     const auth = await signEip7702Authorization(eoa, { chainId: 0, nonce: 0, address: eip7702delegate.address })
     const beneficiary = createAddress()
     console.log('delegate=', eip7702delegate.address)
@@ -138,6 +143,20 @@ describe('Simple7702Account.sol', function () {
       to: entryPoint.address,
       data: handleOps
     }
-    await geth.sendTx(tx)
+    await expectUserOpToSucceed(await geth.sendTx(tx))
+    expect(await geth.provider.getBalance(addr1)).to.equal(1)
   })
+
+  // geth.sendTx only tells us the handleOps tx didn't revert. without this, a userOp that is
+  // rolled back (by the reserve balance check, or by running out of callGasLimit) looks like a pass.
+  async function expectUserOpToSucceed (txHash: string): Promise<void> {
+    const rcpt = await geth.provider.getTransactionReceipt(txHash)
+    const events = rcpt.logs.map(log => {
+      try { return entryPoint.interface.parseLog(log) } catch { return null }
+    })
+    expect(events.map(e => e?.name)).to.not.include('UserOperationReserveBalanceViolated')
+    const userOpEvent = events.find(e => e?.name === 'UserOperationEvent')
+    expect(userOpEvent, 'no UserOperationEvent').to.not.be.undefined
+    expect(userOpEvent!.args.success).to.equal(true)
+  }
 })

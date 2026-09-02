@@ -7,6 +7,7 @@ import "../interfaces/IAccount.sol";
 import "../interfaces/IAccountExecute.sol";
 import "../interfaces/IEntryPoint.sol";
 import "../interfaces/IPaymaster.sol";
+import "../interfaces/IReserveBalance.sol";
 
 import "./UserOperationLib.sol";
 import "./StakeManager.sol";
@@ -23,7 +24,9 @@ import "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 /**
  * Account-Abstraction (EIP-4337) singleton EntryPoint v0.8 implementation.
  * Only one instance required on each chain.
+ * @dev This contract has been modified to support reserve balance introspection via a precompile at address 0x1001.
  * @custom:security-contact https://bounty.ethereum.org
+ * @custom:security-contact security@monad.foundation
  */
 contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuardTransient, ERC165, EIP712 {
 
@@ -39,12 +42,16 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuardT
     // Marker for inner call revert on out of gas
     bytes32 private constant INNER_OUT_OF_GAS = hex"deaddead";
     bytes32 private constant INNER_REVERT_LOW_PREFUND = hex"deadaa51";
+    // we pick ba to distinguish from the aa series of revert codes, to avoid confusion with actual prefund-related reverts (e.g. AA31, AA32, AA36)
+    bytes32 private constant INNER_REVERT_DIPPED_INTO_RESERVE = hex"deadba51";
 
     uint256 private constant REVERT_REASON_MAX_LEN = 2048;
     // Penalty charged for either unused execution gas or postOp gas
-    uint256 private constant UNUSED_GAS_PENALTY_PERCENT = 10;
+    uint256 private constant UNUSED_GAS_PENALTY_PERCENT = 100;
     // Threshold below which no penalty would be charged
-    uint256 private constant PENALTY_GAS_THRESHOLD = 40000;
+    uint256 private constant PENALTY_GAS_THRESHOLD = 0;
+
+    address private constant RESERVE_BALANCE = 0x0000000000000000000000000000000000001001;
 
     SenderCreator private immutable _senderCreator = new SenderCreator();
 
@@ -252,6 +259,13 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuardT
                 _emitPrefundTooLow(opInfo);
                 _emitUserOperationEvent(opInfo, false, actualGasCost, actualGas);
                 collected = actualGasCost;
+            } else if (innerRevertCode == INNER_REVERT_DIPPED_INTO_RESERVE) {
+                // innerCall reverted after execution due to reserve balance violation.
+                uint256 actualGas = preGas - gasleft() + opInfo.preOpGas;
+                uint256 actualGasCost = opInfo.prefund;
+                _emitReserveBalanceViolatedEvent(opInfo);
+                _emitUserOperationEvent(opInfo, false, actualGasCost, actualGas);
+                collected = actualGasCost;
             } else {
                 uint256 freePtr = _getFreePtr();
                 emit PostOpRevertReason(
@@ -300,6 +314,19 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuardT
      */
     function _emitPrefundTooLow(UserOpInfo memory opInfo) internal virtual {
         emit UserOperationPrefundTooLow(
+            opInfo.userOpHash,
+            opInfo.mUserOp.sender,
+            opInfo.mUserOp.nonce
+        );
+    }
+
+    /**
+     * Emit the UserOperationReserveBalanceViolated event for the given UserOperation.
+     *
+     * @param opInfo - The details of the current UserOperation.
+     */
+    function _emitReserveBalanceViolatedEvent(UserOpInfo memory opInfo) internal virtual {
+        emit UserOperationReserveBalanceViolated(
             opInfo.userOpHash,
             opInfo.mUserOp.sender,
             opInfo.mUserOp.nonce
@@ -417,10 +444,34 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuardT
             }
         }
 
+        if (_dippedIntoReserve()) {
+            // roll back this userOp's execution. the bundle keeps going, but every
+            // remaining userOp sees the same reserve state and is rolled back too.
+            assembly ("memory-safe") {
+                mstore(0, INNER_REVERT_DIPPED_INTO_RESERVE)
+                revert(0, 32)
+            }
+        }
+
         unchecked {
             uint256 actualGas = preGas - gasleft() + opInfo.preOpGas;
             return _postExecution(mode, opInfo, context, actualGas);
         }
+    }
+
+    /**
+     * Check if the reserve balance was dipped into by making a call to the reserve balance precompile.
+     * If the call fails or returns an invalid value, we assume the worst and treat it as if the reserve balance was dipped into.
+     * @dev The precompile only supports CALL on this specific selector
+     */
+    function _dippedIntoReserve() internal returns (bool dipped) {
+        (bool success, bytes memory ret) = RESERVE_BALANCE.call(
+            abi.encodeWithSelector(IReserveBalance.dippedIntoReserve.selector)
+        );
+        if (!success || ret.length != 32) {
+            return true;
+        }
+        dipped = abi.decode(ret, (bool));
     }
 
     /**
@@ -856,7 +907,7 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuardT
                         }
                     }
                     // Calculating a penalty for unused postOp gas
-                    // note that if postOp is reverted, the maximum penalty (10% of postOpGasLimit) is charged.
+                    // note that if postOp is reverted, the maximum penalty (100% of postOpGasLimit) is charged.
                     uint256 postOpGasUsed = postOpPreGas - gasleft();
                     postOpUnusedGasPenalty = _getUnusedGasPenalty(postOpGasUsed, mUserOp.paymasterPostOpGasLimit);
                 }
