@@ -7,7 +7,7 @@ import 'solidity-coverage'
 
 import * as fs from 'fs'
 
-const SALT = '0x0a59dbff790c23c976a548690c27297883cc66b4c67024f9117b0238995e35e9'
+const SALT = '0xc5322280eebcac668861dbee1cc4c934363fb859d18eeb6247964ff764461bef'
 process.env.SALT = process.env.SALT ?? SALT
 
 task('deploy', 'Deploy contracts')
@@ -17,14 +17,16 @@ const mnemonicFileName = process.env.MNEMONIC_FILE!
 let mnemonic = 'test '.repeat(11) + 'junk'
 if (fs.existsSync(mnemonicFileName)) { mnemonic = fs.readFileSync(mnemonicFileName, 'ascii') }
 
-function getNetwork1 (url: string): { url: string, accounts: { mnemonic: string } } {
+const accounts = process.env.PRIVATE_KEY != null ? [process.env.PRIVATE_KEY] : { mnemonic }
+
+function getNetwork1 (url: string): { url: string, accounts: string[] | { mnemonic: string } } {
   return {
     url,
-    accounts: { mnemonic }
+    accounts
   }
 }
 
-function getNetwork (name: string): { url: string, accounts: { mnemonic: string } } {
+function getNetwork (name: string): { url: string, accounts: string[] | { mnemonic: string } } {
   return getNetwork1(`https://${name}.infura.io/v3/${process.env.INFURA_ID}`)
   // return getNetwork1(`wss://${name}.infura.io/ws/v3/${process.env.INFURA_ID}`)
 }
@@ -62,6 +64,8 @@ const config: HardhatUserConfig = {
     // github action starts localgeth service, for gas calculations
     localgeth: { url: 'http://localgeth:8545' },
     sepolia: getNetwork('sepolia'),
+    'monad-testnet': getNetwork1('https://testnet-rpc.monad.xyz'),
+    monad: getNetwork1('https://rpc.monad.xyz'),
     proxy: getNetwork1('http://localhost:8545')
   },
   mocha: {

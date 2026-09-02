@@ -5,7 +5,7 @@ import {
   AddressZero,
   createAddress,
   createAccountOwner,
-  deployEntryPoint, decodeRevertReason
+  deployEntryPoint, decodeRevertReason, setDippedIntoReserve
 } from '../test/testutils'
 import {
   EntryPoint, EntryPoint__factory, SimpleAccountFactory,
@@ -276,11 +276,19 @@ export class GasChecker {
     }
     const rcpt = await ret.wait()
     const gasUsed = rcpt.gasUsed.toNumber()
-    const countSuccessOps = rcpt.events?.filter(e => e.event === 'UserOperationEvent' && e.args?.success).length
+    const countSuccessOps = rcpt.events?.filter(e => e.event === 'UserOperationEvent' && e.args?.success === true).length ?? 0
+    const reserveViolationEvents = rcpt.events?.filter(e => e.event === 'UserOperationReserveBalanceViolated').length ?? 0
 
     rcpt.events?.filter(e => e.event?.match(/PostOpRevertReason|UserOperationRevertReason/)).find(e => {
       throw new Error(`${e.event}(${decodeRevertReason(e.args?.revertReason)})`)
     })
+    // gas numbers measured on reverted ops are meaningless, so don't let them into the report
+    if (reserveViolationEvents > 0) {
+      throw new Error(`${reserveViolationEvents}/${userOps.length} UserOps hit the reserve balance check. ` +
+        (GasCheckCollector.inst.isReserveBalancePrecompileSimulated
+          ? 'the precompile is stubbed to return false, so this is a bug in the EntryPoint'
+          : 'this network has no reserve balance precompile, or the sender is below its reserve'))
+    }
     // check for failure with no revert reason (e.g. OOG)
     expect(countSuccessOps).to.eq(userOps.length, 'Some UserOps failed to execute (with no revert reason)')
 
@@ -324,6 +332,7 @@ export class GasCheckCollector {
   static initPromise?: Promise<GasCheckCollector>
 
   entryPoint: EntryPoint
+  isReserveBalancePrecompileSimulated = false
 
   static async init (): Promise<void> {
     if (this.inst == null) {
@@ -337,6 +346,18 @@ export class GasCheckCollector {
   async _init (entryPointAddressOrTest: string = 'test'): Promise<this> {
     debug('signer=', await globalSigner.getAddress())
     DefaultGasTestInfo.beneficiary = createAddress()
+
+    // on hardhat we have to stand in for the reserve-balance precompile, or every op reverts
+    try {
+      await setDippedIntoReserve(false, provider)
+      this.isReserveBalancePrecompileSimulated = true
+    } catch (e: any) {
+      const message = String(e?.message ?? e)
+      if (!message.includes('hardhat_setCode')) {
+        throw e
+      }
+      debug('no hardhat_setCode on this network; relying on the native reserve precompile')
+    }
 
     if (entryPointAddressOrTest === 'test') {
       this.entryPoint = await deployEntryPoint(provider)
@@ -420,5 +441,7 @@ export class GasCheckCollector {
 }
 
 after(() => {
-  GasCheckCollector.inst.doneTable()
+  if (GasCheckCollector.inst != null) {
+    GasCheckCollector.inst.doneTable()
+  }
 })
