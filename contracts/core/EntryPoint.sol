@@ -445,8 +445,7 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuardT
         }
 
         if (_dippedIntoReserve()) {
-            // roll back this userOp's execution. the bundle keeps going, but every
-            // remaining userOp sees the same reserve state and is rolled back too.
+            // roll back this userOp's execution
             assembly ("memory-safe") {
                 mstore(0, INNER_REVERT_DIPPED_INTO_RESERVE)
                 revert(0, 32)
