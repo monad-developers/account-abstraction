@@ -26,6 +26,7 @@ import { fillAndSign, fillSignAndPack, packUserOp, simulateHandleOp, simulateVal
 import { BigNumber, Wallet } from 'ethers'
 import { hexConcat, parseEther } from 'ethers/lib/utils'
 import { UserOperation } from './UserOperation'
+import EntryPointSimulationsJson from '../artifacts/contracts/core/EntryPointSimulations.sol/EntryPointSimulations.json'
 
 const provider = ethers.provider
 describe('EntryPointSimulations', function () {
@@ -41,7 +42,9 @@ describe('EntryPointSimulations', function () {
   before(async function () {
     await setDippedIntoReserve(false)
     entryPoint = await deployEntryPoint()
-    epSimulation = await new EntryPointSimulations__factory(provider.getSigner()).deploy()
+    // Simulation runtime is supplied through code overrides and may exceed EIP-170.
+    epSimulation = EntryPointSimulations__factory.connect(createAddress(), ethersSigner)
+    await provider.send('hardhat_setCode', [epSimulation.address, EntryPointSimulationsJson.deployedBytecode])
 
     accountOwner = createAccountOwner();
     ({
