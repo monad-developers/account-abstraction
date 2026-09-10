@@ -8,7 +8,7 @@ params="--http --http.api eth,net,web3,debug --rpc.allow-unprotected-txs --dev -
 # geth --dev uses the first keystore account, so importing a well-known test key (hardhat account 0)
 # keeps the funded dev account the same across geth versions. the genesis funds it, and preallocates
 # a stub for the reserve balance precompile: without the stub geth returns empty data for that
-# address, which the EntryPoint reads as "dipped into reserve" and rolls back every userOp.
+# address, which the EntryPoint reads as "dipped into reserve" and rejects bundle admission.
 docker run --name $name --rm -p $port:8545 \
   -v "$dir/geth-genesis.json:/genesis.json:ro" \
   --entrypoint sh ethpandaops/geth:master -c "

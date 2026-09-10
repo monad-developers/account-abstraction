@@ -13,11 +13,13 @@ process.env.SALT = process.env.SALT ?? SALT
 task('deploy', 'Deploy contracts')
   .addFlag('simpleAccountFactory', 'deploy sample factory (by default, enabled only on localhost)')
 
-const mnemonicFileName = process.env.MNEMONIC_FILE!
-let mnemonic = 'test '.repeat(11) + 'junk'
-if (fs.existsSync(mnemonicFileName)) { mnemonic = fs.readFileSync(mnemonicFileName, 'ascii') }
-
-const accounts = process.env.PRIVATE_KEY != null ? [process.env.PRIVATE_KEY] : { mnemonic }
+const mnemonicFileName = process.env.MNEMONIC_FILE
+const explicitAccounts = process.env.PRIVATE_KEY != null
+  ? [process.env.PRIVATE_KEY]
+  : mnemonicFileName != null && fs.existsSync(mnemonicFileName)
+    ? { mnemonic: fs.readFileSync(mnemonicFileName, 'ascii').trim() }
+    : undefined
+const accounts = explicitAccounts ?? { mnemonic: 'test '.repeat(11) + 'junk' }
 
 function getNetwork1 (url: string): { url: string, accounts: string[] | { mnemonic: string } } {
   return {
@@ -65,7 +67,7 @@ const config: HardhatUserConfig = {
     localgeth: { url: 'http://localgeth:8545' },
     sepolia: getNetwork('sepolia'),
     'monad-testnet': getNetwork1('https://testnet-rpc.monad.xyz'),
-    monad: getNetwork1('https://rpc.monad.xyz'),
+    monad: { url: 'https://rpc.monad.xyz', accounts: explicitAccounts ?? [] },
     proxy: getNetwork1('http://localhost:8545')
   },
   mocha: {

@@ -15,11 +15,15 @@ import "../core/BaseAccount.sol";
  */
 contract Simple7702Account is BaseAccount, IERC165, IERC1271, ERC1155Holder, ERC721Holder {
 
-    // address of entryPoint v0.8
-    function entryPoint() public pure override returns (IEntryPoint) {
-        // this is a different entryPoint address since the EntryPoint contract has been changed to support the reserve
-        // balance introspection precompile
-        return IEntryPoint(0x433708503ec7783A86C646C766E12098b15499B5);
+    IEntryPoint private immutable _entryPoint;
+
+    constructor(IEntryPoint anEntryPoint) {
+        require(address(anEntryPoint) != address(0), "invalid EntryPoint");
+        _entryPoint = anEntryPoint;
+    }
+
+    function entryPoint() public view override returns (IEntryPoint) {
+        return _entryPoint;
     }
 
     /**
