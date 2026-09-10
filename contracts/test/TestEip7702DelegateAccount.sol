@@ -7,6 +7,8 @@ contract TestEip7702DelegateAccount is Simple7702Account {
 
     bool public testInitCalled;
 
+    constructor(IEntryPoint anEntryPoint) Simple7702Account(anEntryPoint) {}
+
     function testInit() public {
         testInitCalled = true;
     }

@@ -34,6 +34,14 @@ Account abstraction allows users to interact with Ethereum using smart contract 
 
 - **SimpleAccountFactory** (`contracts/accounts/SimpleAccountFactory.sol`): A sample factory contract for SimpleAccount
 
+## Monad reserve and fee policy
+
+Reserve status must be clean when a bundle enters EntryPoint and after each UserOperation validation or aggregator signature validation. A validation reserve violation rejects the bundle, including in simulation. An execution reserve violation rolls back that operation's execution, consumes its validated nonce, and permits later operations to continue. A paymaster that returned context receives one `postOp(opReverted)` settlement attempt after execution rollback. A callback that reverts or violates reserves is rolled back and is not retried.
+
+Unused `callGasLimit` and `paymasterPostOpGasLimit` are charged at 100%, with no threshold. This includes the entire postOp allowance when validation returns empty context; no callback runs in that case. Normal settlement and reserve-rejection settlement use `min(maxFeePerGas, maxPriorityFeePerGas + block.basefee)`. The prefund is reserved at `maxFeePerGas`, and the remainder is refunded. If final accounting exceeds the prefund, execution is rolled back and the charge is capped at the prefund.
+
+Unused account and paymaster verification gas remain refundable. [Monad charges the outer transaction's gas limit](https://blog.monad.xyz/blog/how-monad-works), so bundlers must estimate the complete bundle and price its overhead through `preVerificationGas`; summing every declared verification limit does not guarantee reimbursement. Leave sufficient verification-gas slack for final accounting and reserve checks, and simulate the complete operation: increasing `preVerificationGas` alone increases both the prefund and the charge equally, so it cannot cure a prefund shortfall. Integrations must inspect `UserOperationEvent.success`, including `UserOperationPrefundTooLow` and `UserOperationReserveBalanceViolated` failures, even when the bundle transaction succeeds.
+
 
 # Developer setup
 
@@ -57,6 +65,8 @@ yarn compile
 ```bash
 yarn test
 ``` 
+
+To run the native reserve integration tests, start Monad Anvil with `anvil --monad --hardfork MonadNine`, then run `MONAD_TEST_RPC=http://127.0.0.1:8545 yarn test test/entrypoint-monad.test.ts`. These tests use Anvil state controls and the native reserve precompile; they are skipped when `MONAD_TEST_RPC` is unset.
 	
 
 ## Entrypoint Deployment
@@ -73,7 +83,7 @@ The EntryPoint is deployed by using
 hardhat deploy --network {net}
 ```
 
-[EntryPoint v0.8](https://github.com/eth-infinitism/account-abstraction/releases/latest) is always deployed at address `0x4337084d9e255ff0702461cf8895ce9e3b5ff108`
+The upstream EntryPoint v0.8 deployment address does not apply to this modified Monad build. Its deterministic address depends on the compiled bytecode and `SALT`; use the deployment record produced for the selected network. Existing deployment records describe their original builds and do not update when source code changes. `Simple7702Account` is constructed with that deployment's EntryPoint address.
 
 This repository also includes a number of audited base classes and utilities that can simplify the development of AA related contracts.
 
