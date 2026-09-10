@@ -13,7 +13,8 @@ import {
   createAccountOwner,
   createAddress,
   decodeRevertReason,
-  deployEntryPoint
+  deployEntryPoint,
+  setDippedIntoReserve
 } from './testutils'
 import {
   INITCODE_EIP7702_MARKER,
@@ -53,6 +54,7 @@ describe('EntryPoint EIP-7702 tests', function () {
     before(async function () {
       this.timeout(20000)
       chainId = await ethers.provider.getNetwork().then(net => net.chainId)
+      await setDippedIntoReserve(false)
       entryPoint = await deployEntryPoint()
     })
 
@@ -168,7 +170,7 @@ describe('EntryPoint EIP-7702 tests', function () {
           await geth.init()
           eoa = createAccountOwner(geth.provider)
           entryPoint = await deployEntryPoint(geth.provider)
-          delegate = await new TestEip7702DelegateAccount__factory(geth.provider.getSigner()).deploy()
+          delegate = await new TestEip7702DelegateAccount__factory(geth.provider.getSigner()).deploy(entryPoint.address)
           console.log('\tdelegate addr=', delegate.address, 'len=', await geth.provider.getCode(delegate.address).then(code => code.length))
           await geth.sendTx({ to: eoa.address, value: gethHex(parseEther('1')) })
         })

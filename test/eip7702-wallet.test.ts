@@ -1,12 +1,40 @@
 import { expect } from 'chai'
 
-import { Simple7702Account, Simple7702Account__factory, EntryPoint, TestPaymasterAcceptAll__factory } from '../typechain'
+import { Simple7702Account, Simple7702Account__factory, EntryPoint, EntryPoint__factory, TestPaymasterAcceptAll__factory } from '../typechain'
 import { createAccountOwner, createAddress, deployEntryPoint } from './testutils'
 import { fillAndSign, INITCODE_EIP7702_MARKER, packUserOp } from './UserOp'
 import { hexConcat, parseEther } from 'ethers/lib/utils'
 import { signEip7702Authorization } from './eip7702helpers'
 import { GethExecutable } from './GethExecutable'
 import { Wallet } from 'ethers'
+import { ethers } from 'hardhat'
+
+describe('Simple7702Account EntryPoint binding', () => {
+  it('authorizes the selected EntryPoint and rejects the former hardcoded address', async () => {
+    const signer = ethers.provider.getSigner()
+    const entryPoint = await new EntryPoint__factory(signer).deploy()
+    const account = await new Simple7702Account__factory(signer).deploy(entryPoint.address)
+    const formerEntryPoint = '0x433708503ec7783A86C646C766E12098b15499B5'
+    expect(entryPoint.address).to.not.equal(formerEntryPoint)
+    expect(await account.entryPoint()).to.equal(entryPoint.address)
+
+    await signer.sendTransaction({ to: account.address, value: 1 })
+    await ethers.provider.send('hardhat_setBalance', [entryPoint.address, '0x1000000000000000000'])
+    const entryPointSigner = await ethers.getImpersonatedSigner(entryPoint.address)
+    const recipient = createAddress()
+    await account.connect(entryPointSigner).execute(recipient, 1, '0x')
+    expect(await ethers.provider.getBalance(recipient)).to.equal(1)
+    await ethers.provider.send('hardhat_stopImpersonatingAccount', [entryPoint.address])
+
+    await expect(account.connect(formerEntryPoint).callStatic.executeBatch([]))
+      .to.be.revertedWith('not from self or EntryPoint')
+  })
+
+  it('rejects a zero EntryPoint', async () => {
+    await expect(new Simple7702Account__factory(ethers.provider.getSigner()).deploy(ethers.constants.AddressZero))
+      .to.be.revertedWith('invalid EntryPoint')
+  })
+})
 
 describe('Simple7702Account.sol', function () {
   // can't deploy coverage "entrypoint" on geth (contract too large)
@@ -25,8 +53,8 @@ describe('Simple7702Account.sol', function () {
 
     entryPoint = await deployEntryPoint(geth.provider)
 
-    eip7702delegate = await new Simple7702Account__factory(geth.provider.getSigner()).deploy()
-    expect(await eip7702delegate.entryPoint()).to.equal(entryPoint.address, 'fix entryPoint in Simple7702Account.sol')
+    eip7702delegate = await new Simple7702Account__factory(geth.provider.getSigner()).deploy(entryPoint.address)
+    expect(await eip7702delegate.entryPoint()).to.equal(entryPoint.address)
     console.log('set eip7702delegate=', eip7702delegate.address)
   })
 
@@ -88,7 +116,8 @@ describe('Simple7702Account.sol', function () {
       sender: eoa.address,
       initCode: INITCODE_EIP7702_MARKER,
       nonce: 0,
-      callData
+      callData,
+      callGasLimit: 1e5
     }, eoa, entryPoint, { eip7702delegate: eip7702delegate.address })
 
     await geth.sendTx({ to: eoa.address, value: parseEther('1') })
@@ -106,7 +135,8 @@ describe('Simple7702Account.sol', function () {
       to: entryPoint.address,
       data: handleOps
     }
-    await geth.sendTx(tx)
+    await expectUserOpToSucceed(await geth.sendTx(tx))
+    expect(await geth.provider.getBalance(addr1)).to.equal(1)
   })
 
   it('should use EntryPoint with paymaster', async () => {
@@ -120,9 +150,12 @@ describe('Simple7702Account.sol', function () {
       paymaster: paymaster.address,
       initCode: INITCODE_EIP7702_MARKER,
       nonce: 0,
-      callData
+      callData,
+      callGasLimit: 1e5
     }, eoa, entryPoint, { eip7702delegate: eip7702delegate.address })
 
+    // the paymaster covers gas, but the account still needs the wei it is about to transfer
+    await geth.sendTx({ to: eoa.address, value: 1000 })
     const auth = await signEip7702Authorization(eoa, { chainId: 0, nonce: 0, address: eip7702delegate.address })
     const beneficiary = createAddress()
     console.log('delegate=', eip7702delegate.address)
@@ -138,6 +171,20 @@ describe('Simple7702Account.sol', function () {
       to: entryPoint.address,
       data: handleOps
     }
-    await geth.sendTx(tx)
+    await expectUserOpToSucceed(await geth.sendTx(tx))
+    expect(await geth.provider.getBalance(addr1)).to.equal(1)
   })
+
+  // geth.sendTx only tells us the handleOps tx didn't revert. without this, a userOp that is
+  // rolled back (by the reserve balance check, or by running out of callGasLimit) looks like a pass.
+  async function expectUserOpToSucceed (txHash: string): Promise<void> {
+    const rcpt = await geth.provider.getTransactionReceipt(txHash)
+    const events = rcpt.logs.map(log => {
+      try { return entryPoint.interface.parseLog(log) } catch { return null }
+    })
+    expect(events.map(e => e?.name)).to.not.include('UserOperationReserveBalanceViolated')
+    const userOpEvent = events.find(e => e?.name === 'UserOperationEvent')
+    expect(userOpEvent, 'no UserOperationEvent').to.not.be.undefined
+    expect(userOpEvent!.args.success).to.equal(true)
+  }
 })

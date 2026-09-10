@@ -280,6 +280,22 @@ export async function checkForBannedOps (txHash: string, checkPaymaster: boolean
   }
 }
 
+export const RESERVE_BALANCE_PRECOMPILE = '0x0000000000000000000000000000000000001001'
+
+// Accept only the four-byte dippedIntoReserve() selector, as the native precompile does.
+const RESERVE_INPUT_CHECK = '0x36600414600c5760006000fd5b60003560e01c633a61584e1460215760006000fd5b'
+const RETURNS_FALSE = RESERVE_INPUT_CHECK + '600060005260206000f3'
+const RETURNS_TRUE = RESERVE_INPUT_CHECK + '600160005260206000f3'
+
+/**
+ * stand in for the Monad reserve-balance precompile, which doesn't exist on hardhat.
+ * without it every CALL from the EntryPoint returns empty data, which the EntryPoint
+ * (deliberately) reads as "dipped into reserve" and rejects bundle admission.
+ */
+export async function setDippedIntoReserve (dipped: boolean, provider = ethers.provider): Promise<void> {
+  await provider.send('hardhat_setCode', [RESERVE_BALANCE_PRECOMPILE, dipped ? RETURNS_TRUE : RETURNS_FALSE])
+}
+
 export async function deployEntryPoint (provider = ethers.provider): Promise<EntryPoint> {
   const create2factory = new Create2Factory(provider)
   const addr = toChecksumAddress(await create2factory.deploy(EntryPoint__factory.bytecode, process.env.SALT, process.env.COVERAGE != null ? 20e6 : 8e6))

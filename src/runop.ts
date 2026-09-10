@@ -2,7 +2,7 @@
 // "yarn run runop [--network ...]"
 
 import hre, { ethers } from 'hardhat'
-import { objdump } from '../test/testutils'
+import { objdump, setDippedIntoReserve } from '../test/testutils'
 import { AASigner, localUserOpSender, rpcUserOpSender } from './AASigner'
 import { TestCounter__factory, EntryPoint__factory } from '../typechain'
 import '../test/aa.init'
@@ -13,6 +13,9 @@ import { TransactionReceipt } from '@ethersproject/abstract-provider/src.ts/inde
 // eslint-disable-next-line @typescript-eslint/no-floating-promises
 (async () => {
   console.log('net=', hre.network.name)
+  if (hre.network.name === 'hardhat') {
+    await setDippedIntoReserve(false)
+  }
   const aa_url = process.env.AA_URL
 
   // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions
@@ -99,10 +102,10 @@ import { TransactionReceipt } from '@ethersproject/abstract-provider/src.ts/inde
   console.log('2nd run:', await evInfo(rcpt2))
 
   async function evInfo (rcpt: TransactionReceipt): Promise<any> {
-    // TODO: checking only latest block...
-    const block = rcpt.blockNumber
-    const ev = await entryPoint.queryFilter(entryPoint.filters.UserOperationEvent(), block)
-    // if (ev.length === 0) return {}
+    const ev = await entryPoint.queryFilter(entryPoint.filters.UserOperationEvent(undefined, myAddress), rcpt.blockHash)
+    if (ev.length !== 1 || !ev[0].args.success) {
+      throw new Error('Expected one successful UserOperation')
+    }
     return ev.map(event => {
       const { nonce, actualGasUsed } = event.args
       const gasUsed = rcpt.gasUsed.toNumber()
