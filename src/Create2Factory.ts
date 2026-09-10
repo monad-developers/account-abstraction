@@ -103,8 +103,10 @@ export class Create2Factory {
       to: Create2Factory.factoryDeployer,
       value: BigNumber.from(Create2Factory.factoryDeploymentFee)
     })
-    // (with latest geth, can't tx.wait on the very first tx: reverts with "transaction indexing is in progress")
-    await new Promise(resolve => setTimeout(resolve, 100))
+    // Geth can expose the funded balance before its first block's receipt index is ready.
+    while ((await this.provider.getBalance(Create2Factory.factoryDeployer)).lt(Create2Factory.factoryDeploymentFee)) {
+      await new Promise(resolve => setTimeout(resolve, 100))
+    }
 
     await this.provider.sendTransaction(Create2Factory.factoryTx).then(async tx => tx.wait())
 

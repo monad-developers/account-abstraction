@@ -1734,10 +1734,12 @@ describe('EntryPoint', function () {
             }
           }
 
-          const withoutAllowance = await execute(0)
+          await execute(0)
+          // Positive allowances take the same branch, including under coverage instrumentation.
+          const minimumAllowance = await execute(1)
           for (const allowance of [4_000, 5_000_000]) {
             const withAllowance = await execute(allowance)
-            expect(withAllowance.sub(withoutAllowance)).to.be.closeTo(BigNumber.from(allowance).mul(3), 1_500)
+            expect(withAllowance.sub(minimumAllowance)).to.be.closeTo(BigNumber.from(allowance - 1).mul(3), 1_500)
           }
         })
 

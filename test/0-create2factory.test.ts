@@ -16,9 +16,25 @@ describe('test Create2Factory', () => {
     provider = ethers.provider
     factory = new Create2Factory(provider)
   })
-  it('should deploy the factory', async () => {
+  it('should wait for funding to be mined before deploying the factory', async () => {
     expect(await factory._isFactoryDeployed()).to.equal(false, 'factory exists before test deploy')
-    await factory.deployFactory()
+    const signer = ethers.provider.getSigner()
+    const sender = await signer.getAddress()
+    const nonce = await provider.getTransactionCount(sender)
+    await ethers.provider.send('evm_setAutomine', [false])
+    const deployment = factory.deployFactory(signer).then(() => undefined, error => error)
+    try {
+      while (await provider.getTransactionCount(sender, 'pending') === nonce) {
+        await new Promise(resolve => setTimeout(resolve, 10))
+      }
+      await new Promise(resolve => setTimeout(resolve, 250))
+      expect(await provider.getBalance(Create2Factory.factoryDeployer)).to.equal(0)
+      expect(await provider.getTransactionCount(Create2Factory.factoryDeployer, 'pending')).to.equal(0)
+    } finally {
+      await ethers.provider.send('evm_mine', [])
+      await ethers.provider.send('evm_setAutomine', [true])
+    }
+    expect(await deployment).to.equal(undefined)
     expect(await factory._isFactoryDeployed()).to.equal(true, 'factory failed to deploy')
   })
 
