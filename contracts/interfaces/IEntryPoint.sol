@@ -92,8 +92,7 @@ interface IEntryPoint is IStakeManager, INonceManager {
     );
 
     /**
-     * Account execution or paymaster postOp violated reserve balance constraints and was rolled back.
-     * Gas is settled at the effective gas price, including unused-gas penalties.
+     * UserOp violated reserve balance constraints. The UserOperation is reverted, and no refund is made.
      * @param userOpHash   - The request unique identifier.
      * @param sender       - The sender of this request.
      * @param nonce        - The nonce used in the request.
@@ -115,9 +114,6 @@ interface IEntryPoint is IStakeManager, INonceManager {
      * @param aggregator - The aggregator used for the following UserOperationEvents.
      */
     event SignatureAggregatorChanged(address indexed aggregator);
-
-    /// The bundle or simulation started with an existing reserve balance violation.
-    error InitialReserveBalanceViolated();
 
     /**
      * A custom revert error of handleOps andhandleAggregatedOps, to identify the offending op.
