@@ -19,7 +19,7 @@ import {
   fund,
   getAccountAddress,
   getAccountInitCode,
-  getBalance, deployEntryPoint, decodeRevertReason, findSimulationUserOpWithMin, setDippedIntoReserve
+  getBalance, deployEntryPoint, decodeRevertReason, findSimulationUserOpWithMin
 } from './testutils'
 
 import { fillAndSign, fillSignAndPack, packUserOp, simulateHandleOp, simulateValidation } from './UserOp'
@@ -39,7 +39,6 @@ describe('EntryPointSimulations', function () {
   let epSimulation: EntryPointSimulations
 
   before(async function () {
-    await setDippedIntoReserve(false)
     entryPoint = await deployEntryPoint()
     epSimulation = await new EntryPointSimulations__factory(provider.getSigner()).deploy()
 

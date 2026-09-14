@@ -2,8 +2,7 @@ import {
   createAccount,
   createAccountOwner,
   createAddress, decodeRevertReason,
-  deployEntryPoint,
-  setDippedIntoReserve
+  deployEntryPoint
 } from './testutils'
 import { fillSignAndPack } from './UserOp'
 import { ethers } from 'hardhat'
@@ -28,7 +27,6 @@ describe('#postOp', () => {
   const lengths: number[] = [1, 31, 32, 33, 992, 993]
 
   before(async function () {
-    await setDippedIntoReserve(false)
     entryPoint = await deployEntryPoint()
 
     for (const i of lengths) {
