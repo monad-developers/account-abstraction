@@ -12,7 +12,7 @@ import {
   EntryPoint
 } from '../typechain'
 import { ethers } from 'hardhat'
-import { createAddress, deployEntryPoint, fund, ONE_ETH } from './testutils'
+import { createAddress, deployEntryPoint, fund, ONE_ETH, setDippedIntoReserve } from './testutils'
 import { DefaultsForUserOp, fillAndPack, packUserOp, simulateValidation } from './UserOp'
 import { expect } from 'chai'
 import { keccak256 } from 'ethereumjs-util'
@@ -40,6 +40,7 @@ describe('bls account', function () {
   let account2: BLSAccount
   let accountDeployer: BLSAccountFactory
   before(async () => {
+    await setDippedIntoReserve(false)
     entrypoint = await deployEntryPoint()
     const BLSOpenLib = await new BLSOpen__factory(ethers.provider.getSigner()).deploy()
     blsAgg = await new BLSSignatureAggregator__factory({
@@ -66,8 +67,8 @@ describe('bls account', function () {
     const sig1 = signer1.sign('0x1234')
     const sig2 = signer2.sign('0x5678')
     const offChainSigResult = hexConcat(aggregate([sig1, sig2]))
-    const userOp1 = packUserOp({ ...DefaultsForUserOp, signature: hexConcat(sig1) })
-    const userOp2 = packUserOp({ ...DefaultsForUserOp, signature: hexConcat(sig2) })
+    const userOp1 = packUserOp({ ...DefaultsForUserOp, sender: account1.address, signature: hexConcat(sig1) })
+    const userOp2 = packUserOp({ ...DefaultsForUserOp, sender: account2.address, signature: hexConcat(sig2) })
     const solidityAggResult = await blsAgg.aggregateSignatures([userOp1, userOp2])
     expect(solidityAggResult).to.equal(offChainSigResult)
   })

@@ -102,7 +102,12 @@ export class Create2Factory {
       to: Create2Factory.factoryDeployer,
       value: BigNumber.from(Create2Factory.factoryDeploymentFee)
     })
-    await this.provider.sendTransaction(Create2Factory.factoryTx)
+    // Geth can expose the funded balance before its first block's receipt index is ready.
+    while ((await this.provider.getBalance(Create2Factory.factoryDeployer)).lt(Create2Factory.factoryDeploymentFee)) {
+      await new Promise(resolve => setTimeout(resolve, 100))
+    }
+    const deployment = await this.provider.sendTransaction(Create2Factory.factoryTx)
+    await deployment.wait()
     if (!await this._isFactoryDeployed()) {
       throw new Error('fatal: failed to deploy deterministic deployer')
     }

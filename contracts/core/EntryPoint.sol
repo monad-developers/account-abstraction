@@ -7,6 +7,7 @@ import "../interfaces/IAccount.sol";
 import "../interfaces/IAccountExecute.sol";
 import "../interfaces/IPaymaster.sol";
 import "../interfaces/IEntryPoint.sol";
+import "../interfaces/IReserveBalance.sol";
 
 import "../utils/Exec.sol";
 import "./StakeManager.sol";
@@ -41,9 +42,14 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard,
     // Marker for inner call revert on out of gas
     bytes32 private constant INNER_OUT_OF_GAS = hex"deaddead";
     bytes32 private constant INNER_REVERT_LOW_PREFUND = hex"deadaa51";
+    bytes32 private constant INNER_REVERT_DIPPED_INTO_RESERVE = hex"deadba51";
+    bytes32 private constant INNER_REVERT_POSTOP_DIPPED_INTO_RESERVE = hex"deadba52";
+    bytes32 private constant INNER_REVERT_POSTOP_FAILED = hex"deadba53";
 
     uint256 private constant REVERT_REASON_MAX_LEN = 2048;
-    uint256 private constant PENALTY_PERCENT = 10;
+    uint256 private constant PENALTY_PERCENT = 100;
+
+    address private constant RESERVE_BALANCE = 0x0000000000000000000000000000000000001001;
 
     /// @inheritdoc IERC165
     function supportsInterface(bytes4 interfaceId) public view virtual override returns (bool) {
@@ -112,14 +118,7 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard,
             }
         }
         if (!success) {
-            bytes32 innerRevertCode;
-            assembly ("memory-safe") {
-                let len := returndatasize()
-                if eq(32,len) {
-                    returndatacopy(0, 0, 32)
-                    innerRevertCode := mload(0)
-                }
-            }
+            (bytes32 innerRevertCode, uint256 unusedGasPenalty) = _getInnerRevertData();
             if (innerRevertCode == INNER_OUT_OF_GAS) {
                 // handleOps was called with gas limit too low. abort entire bundle.
                 //can only be caused by bundler (leaving not enough gas for inner call)
@@ -131,15 +130,18 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard,
                 emitPrefundTooLow(opInfo);
                 emitUserOperationEvent(opInfo, false, actualGasCost, actualGas);
                 collected = actualGasCost;
-            } else {
-                emit PostOpRevertReason(
-                    opInfo.userOpHash,
-                    opInfo.mUserOp.sender,
-                    opInfo.mUserOp.nonce,
-                    Exec.getReturnData(REVERT_REASON_MAX_LEN)
-                );
-
+            } else if (innerRevertCode == INNER_REVERT_DIPPED_INTO_RESERVE) {
+                _emitReserveBalanceViolatedEvent(opInfo);
                 uint256 actualGas = preGas - gasleft() + opInfo.preOpGas;
+                collected = _settleAfterReserveRollback(opIndex, opInfo, context, actualGas);
+            } else {
+                if (innerRevertCode == INNER_REVERT_POSTOP_DIPPED_INTO_RESERVE) {
+                    _emitReserveBalanceViolatedEvent(opInfo);
+                } else {
+                    _emitPostOpRevertReason(opInfo, innerRevertCode);
+                }
+
+                uint256 actualGas = preGas - gasleft() + opInfo.preOpGas + unusedGasPenalty;
                 collected = _postExecution(
                     IPaymaster.PostOpMode.postOpReverted,
                     opInfo,
@@ -147,6 +149,77 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard,
                     actualGas
                 );
             }
+        }
+    }
+
+    function _settleAfterReserveRollback(
+        uint256 opIndex,
+        UserOpInfo memory opInfo,
+        bytes memory context,
+        uint256 actualGas
+    ) internal returns (uint256 collected) {
+        uint256 preGas = gasleft();
+        try this.innerPostOpAfterReserveRollback(opInfo, context, actualGas) returns (uint256 value) {
+            return value;
+        } catch {
+            (bytes32 innerRevertCode, uint256 unusedGasPenalty) = _getInnerRevertData();
+            if (innerRevertCode == INNER_OUT_OF_GAS) {
+                revert FailedOp(opIndex, "AA95 out of gas");
+            }
+            if (innerRevertCode == INNER_REVERT_LOW_PREFUND) {
+                emitPrefundTooLow(opInfo);
+                emitUserOperationEvent(opInfo, false, opInfo.prefund, actualGas + preGas - gasleft());
+                return opInfo.prefund;
+            }
+            if (innerRevertCode != INNER_REVERT_POSTOP_DIPPED_INTO_RESERVE) {
+                _emitPostOpRevertReason(opInfo, innerRevertCode);
+            }
+            return _postExecution(
+                IPaymaster.PostOpMode.postOpReverted,
+                opInfo,
+                context,
+                actualGas + preGas - gasleft() + unusedGasPenalty
+            );
+        }
+    }
+
+    function _getInnerRevertData() internal pure returns (bytes32 code, uint256 unusedGasPenalty) {
+        assembly ("memory-safe") {
+            if eq(returndatasize(), 32) {
+                returndatacopy(0, 0, 32)
+                code := mload(0)
+            }
+            if iszero(lt(returndatasize(), 64)) {
+                returndatacopy(0, 0, 64)
+                let marker := mload(0)
+                if or(eq(marker, INNER_REVERT_POSTOP_FAILED), eq(marker, INNER_REVERT_POSTOP_DIPPED_INTO_RESERVE)) {
+                    code := marker
+                    unusedGasPenalty := mload(32)
+                }
+            }
+        }
+    }
+
+    function _emitPostOpRevertReason(UserOpInfo memory opInfo, bytes32 innerRevertCode) internal {
+        uint256 freePtr;
+        assembly ("memory-safe") {
+            freePtr := mload(0x40)
+        }
+        uint256 offset = innerRevertCode == INNER_REVERT_POSTOP_FAILED ? 64 : 0;
+        bytes memory reason = Exec.getReturnData(REVERT_REASON_MAX_LEN + offset);
+        assembly ("memory-safe") {
+            let len := sub(mload(reason), offset)
+            reason := add(reason, offset)
+            mstore(reason, len)
+        }
+        emit PostOpRevertReason(
+            opInfo.userOpHash,
+            opInfo.mUserOp.sender,
+            opInfo.mUserOp.nonce,
+            reason
+        );
+        assembly ("memory-safe") {
+            mstore(0x40, freePtr)
         }
     }
 
@@ -170,11 +243,20 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard,
         );
     }
 
+    function _emitReserveBalanceViolatedEvent(UserOpInfo memory opInfo) internal virtual {
+        emit UserOperationReserveBalanceViolated(
+            opInfo.userOpHash,
+            opInfo.mUserOp.sender,
+            opInfo.mUserOp.nonce
+        );
+    }
+
     /// @inheritdoc IEntryPoint
     function handleOps(
         PackedUserOperation[] calldata ops,
         address payable beneficiary
     ) public nonReentrant {
+        _requireCleanReserveState();
         uint256 opslen = ops.length;
         UserOpInfo[] memory opInfos = new UserOpInfo[](opslen);
 
@@ -209,6 +291,7 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard,
         UserOpsPerAggregator[] calldata opsPerAggregator,
         address payable beneficiary
     ) public nonReentrant {
+        _requireCleanReserveState();
 
         uint256 opasLen = opsPerAggregator.length;
         uint256 totalOps = 0;
@@ -353,10 +436,66 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard,
             }
         }
 
+        _requireNoReserveViolation(INNER_REVERT_DIPPED_INTO_RESERVE);
+
         unchecked {
             uint256 actualGas = preGas - gasleft() + opInfo.preOpGas;
             return _postExecution(mode, opInfo, context, actualGas);
         }
+    }
+
+    /**
+     * Settle a reserve-rejected operation after its account execution has rolled back.
+     * The separate frame also rolls back a failing or reserve-violating postOp.
+     */
+    function innerPostOpAfterReserveRollback(
+        UserOpInfo memory opInfo,
+        bytes calldata context,
+        uint256 actualGas
+    ) external returns (uint256 collected) {
+        uint256 preGas = gasleft();
+        require(msg.sender == address(this), "AA92 internal call only");
+        if (gasleft() * 63 / 64 < opInfo.mUserOp.paymasterPostOpGasLimit + INNER_GAS_OVERHEAD) {
+            assembly ("memory-safe") {
+                mstore(0, INNER_OUT_OF_GAS)
+                revert(0, 32)
+            }
+        }
+        return _postExecution(
+            IPaymaster.PostOpMode.opReverted,
+            opInfo,
+            context,
+            actualGas + preGas - gasleft()
+        );
+    }
+
+    function _requireCleanReserveState() internal {
+        if (_dippedIntoReserve()) {
+            revert InitialReserveBalanceViolated();
+        }
+    }
+
+    function _requireNoReserveViolation(bytes32 marker) internal {
+        if (_dippedIntoReserve()) {
+            assembly ("memory-safe") {
+                mstore(0, marker)
+                revert(0, 32)
+            }
+        }
+    }
+
+    /**
+     * Fail closed if reserve introspection is unavailable or malformed.
+     * @dev The precompile only supports CALL on this specific selector.
+     */
+    function _dippedIntoReserve() internal returns (bool dipped) {
+        (bool success, bytes memory ret) = RESERVE_BALANCE.call(
+            abi.encodeWithSelector(IReserveBalance.dippedIntoReserve.selector)
+        );
+        if (!success || ret.length != 32) {
+            return true;
+        }
+        dipped = abi.decode(ret, (bool));
     }
 
     /// @inheritdoc IEntryPoint
@@ -666,6 +805,9 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard,
                 requiredPreFund
             );
         }
+        if (_dippedIntoReserve()) {
+            revert FailedOp(opIndex, "AA27 reserve violation during validation");
+        }
         unchecked {
             outOpInfo.prefund = requiredPreFund;
             outOpInfo.contextOffset = getOffsetOfMemoryBytes(context);
@@ -695,38 +837,40 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard,
             uint256 gasPrice = getUserOpGasPrice(mUserOp);
 
             address paymaster = mUserOp.paymaster;
+            uint256 callUnusedGasPenalty;
+            if (mode != IPaymaster.PostOpMode.postOpReverted) {
+                callUnusedGasPenalty = _getUnusedGasPenalty(actualGas - opInfo.preOpGas, mUserOp.callGasLimit);
+                actualGas += callUnusedGasPenalty;
+            }
+            uint256 postOpUnusedGasPenalty;
             if (paymaster == address(0)) {
                 refundAddress = mUserOp.sender;
             } else {
                 refundAddress = paymaster;
-                if (context.length > 0) {
+                if (context.length > 0 && mode != IPaymaster.PostOpMode.postOpReverted) {
                     actualGasCost = actualGas * gasPrice;
-                    if (mode != IPaymaster.PostOpMode.postOpReverted) {
-                        try IPaymaster(paymaster).postOp{
-                            gas: mUserOp.paymasterPostOpGasLimit
-                        }(mode, context, actualGasCost, gasPrice)
-                        // solhint-disable-next-line no-empty-blocks
-                        {} catch {
-                            bytes memory reason = Exec.getReturnData(REVERT_REASON_MAX_LEN);
-                            revert PostOpReverted(reason);
-                        }
+                    uint256 postOpPreGas = gasleft();
+                    try IPaymaster(paymaster).postOp{
+                        gas: mUserOp.paymasterPostOpGasLimit
+                    }(mode, context, actualGasCost, gasPrice)
+                    // solhint-disable-next-line no-empty-blocks
+                    {} catch {
+                        postOpUnusedGasPenalty = _getUnusedGasPenalty(postOpPreGas - gasleft(), mUserOp.paymasterPostOpGasLimit);
+                        bytes memory reason = abi.encodeWithSelector(PostOpReverted.selector, Exec.getReturnData(REVERT_REASON_MAX_LEN));
+                        _revertPostOp(INNER_REVERT_POSTOP_FAILED, callUnusedGasPenalty + postOpUnusedGasPenalty, reason);
                     }
+                    // Check before refund accounting while postOp can still be rolled back.
+                    if (_dippedIntoReserve()) {
+                        postOpUnusedGasPenalty = _getUnusedGasPenalty(postOpPreGas - gasleft(), mUserOp.paymasterPostOpGasLimit);
+                        _revertPostOp(INNER_REVERT_POSTOP_DIPPED_INTO_RESERVE, callUnusedGasPenalty + postOpUnusedGasPenalty, "");
+                    }
+                    uint256 postOpGasUsed = postOpPreGas - gasleft();
+                    postOpUnusedGasPenalty = _getUnusedGasPenalty(postOpGasUsed, mUserOp.paymasterPostOpGasLimit);
+                } else if (mode != IPaymaster.PostOpMode.postOpReverted) {
+                    postOpUnusedGasPenalty = _getUnusedGasPenalty(0, mUserOp.paymasterPostOpGasLimit);
                 }
             }
-            actualGas += preGas - gasleft();
-
-            // Calculating a penalty for unused execution gas
-            {
-                uint256 executionGasLimit = mUserOp.callGasLimit + mUserOp.paymasterPostOpGasLimit;
-                uint256 executionGasUsed = actualGas - opInfo.preOpGas;
-                // this check is required for the gas used within EntryPoint and not covered by explicit gas limits
-                if (executionGasLimit > executionGasUsed) {
-                    uint256 unusedGas = executionGasLimit - executionGasUsed;
-                    uint256 unusedGasPenalty = (unusedGas * PENALTY_PERCENT) / 100;
-                    actualGas += unusedGasPenalty;
-                }
-            }
-
+            actualGas += preGas - gasleft() + postOpUnusedGasPenalty;
             actualGasCost = actualGas * gasPrice;
             uint256 prefund = opInfo.prefund;
             if (prefund < actualGasCost) {
@@ -747,6 +891,20 @@ contract EntryPoint is IEntryPoint, StakeManager, NonceManager, ReentrancyGuard,
                 emitUserOperationEvent(opInfo, success, actualGasCost, actualGas);
             }
         } // unchecked
+    }
+
+    function _revertPostOp(bytes32 code, uint256 unusedGasPenalty, bytes memory reason) internal pure {
+        // Preserve the first attempt's penalties across rollback; cleanup measures its gas separately.
+        Exec.revertWithData(abi.encodePacked(code, unusedGasPenalty, reason));
+    }
+
+    function _getUnusedGasPenalty(uint256 gasUsed, uint256 gasLimit) internal pure returns (uint256) {
+        unchecked {
+            if (gasLimit <= gasUsed) {
+                return 0;
+            }
+            return (gasLimit - gasUsed) * PENALTY_PERCENT / 100;
+        }
     }
 
     /**

@@ -6,13 +6,13 @@ import {
   checkForGeth,
   createAddress,
   createAccountOwner,
-  deployEntryPoint, decodeRevertReason
+  deployEntryPoint, decodeRevertReason, setDippedIntoReserve
 } from '../test/testutils'
 import {
   EntryPoint, EntryPoint__factory, SimpleAccountFactory,
   SimpleAccountFactory__factory, SimpleAccount__factory
 } from '../typechain'
-import { BigNumberish, Wallet } from 'ethers'
+import { BigNumberish, ContractReceipt, ContractTransaction, Wallet } from 'ethers'
 import hre from 'hardhat'
 import { fillSignAndPack, fillUserOp, packUserOp, signUserOp } from '../test/UserOp'
 import { TransactionReceipt } from '@ethersproject/abstract-provider'
@@ -36,6 +36,15 @@ const getBalance = hre.ethers.provider.getBalance
 
 function range (n: number): number[] {
   return Array(n).fill(0).map((val, index) => index)
+}
+
+export async function waitForTransaction (tx: ContractTransaction): Promise<ContractReceipt> {
+  // Geth dev mines immediately; wait for receipt indexing before ethers starts block polling.
+  for (let count = 0; count < 100; count++) {
+    if (await provider.getTransactionReceipt(tx.hash) != null) break
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
+  return await tx.wait()
 }
 
 interface GasTestInfo {
@@ -162,7 +171,10 @@ export class GasChecker {
         await GasCheckCollector.inst.entryPoint.depositTo(addr, { value: minDepositOrBalance.mul(5) })
       }
     }
-    await this.entryPoint().handleOps(creationOps, ethersSigner.getAddress())
+    const receipt = await this.entryPoint().handleOps(creationOps, ethersSigner.getAddress()).then(async tx => tx.wait())
+    expect(receipt.events?.filter(event => event.event === 'UserOperationReserveBalanceViolated')).to.have.lengthOf(0)
+    expect(receipt.events?.filter(event => event.event === 'UserOperationEvent' && event.args?.success === true))
+      .to.have.lengthOf(creationOps.length)
   }
 
   /**
@@ -254,9 +266,11 @@ export class GasChecker {
       throw e
     })
     const ret = await GasCheckCollector.inst.entryPoint.handleOps(userOps, info.beneficiary, { gasLimit: gasEst.mul(3).div(2) })
-    const rcpt = await ret.wait()
+    const rcpt = await waitForTransaction(ret)
     const gasUsed = rcpt.gasUsed.toNumber()
-    const countSuccessOps = rcpt.events?.filter(e => e.event === 'UserOperationEvent' && e.args?.success).length
+    const countSuccessOps = rcpt.events?.filter(e => e.event === 'UserOperationEvent' && e.args?.success === true).length
+    expect(rcpt.events?.filter(e => e.event === 'UserOperationReserveBalanceViolated'))
+      .to.have.lengthOf(0, 'Reserve checks rejected UserOps measured for the gas report')
 
     rcpt.events?.filter(e => e.event?.match(/PostOpRevertReason|UserOperationRevertReason/)).find(e => {
       // console.log(e.event, e.args)
@@ -318,6 +332,12 @@ export class GasCheckCollector {
   async _init (entryPointAddressOrTest: string = 'test'): Promise<this> {
     console.log('signer=', await ethersSigner.getAddress())
     DefaultGasTestInfo.beneficiary = createAddress()
+
+    try {
+      await setDippedIntoReserve(false, provider)
+    } catch (e: any) {
+      if (!String(e?.message ?? e).includes('hardhat_setCode')) throw e
+    }
 
     const bal = await getBalance(ethersSigner.getAddress())
     if (bal.gt(parseEther('100000000'))) {

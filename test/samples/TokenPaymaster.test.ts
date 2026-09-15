@@ -30,7 +30,8 @@ import {
   createAccountOwner,
   decodeRevertReason,
   deployEntryPoint,
-  fund, objdump
+  fund, objdump,
+  setDippedIntoReserve
 } from '../testutils'
 
 import { fillUserOp, packUserOp, signUserOp } from '../UserOp'
@@ -57,6 +58,7 @@ describe('TokenPaymaster', function () {
     ])
   )
 
+  let snapshot: string
   let chainId: number
   let testUniswap: TestUniswap
   let entryPoint: EntryPoint
@@ -73,6 +75,7 @@ describe('TokenPaymaster', function () {
   let weth: TestWrappedNativeToken
 
   before(async function () {
+    await setDippedIntoReserve(false)
     entryPoint = await deployEntryPoint()
     weth = await new TestWrappedNativeToken__factory(ethersSigner).deploy()
     testUniswap = await new TestUniswap__factory(ethersSigner).deploy(weth.address)
@@ -134,6 +137,14 @@ describe('TokenPaymaster', function () {
     callData = await account.populateTransaction.execute(accountOwner.address, 0, '0x').then(tx => tx.data!)
   })
 
+  beforeEach(async () => {
+    snapshot = await ethers.provider.send('evm_snapshot', [])
+  })
+
+  afterEach(async () => {
+    await ethers.provider.send('evm_revert', [snapshot])
+  })
+
   it('Only owner should withdraw eth from paymaster to destination', async function () {
     const recipient = accountOwner.address
     const amount = 2e18.toString()
@@ -158,7 +169,6 @@ describe('TokenPaymaster', function () {
   })
 
   it('paymaster should reject if postOpGaSLimit is too low', async () => {
-    const snapshot = await ethers.provider.send('evm_snapshot', [])
     const config = await paymaster.tokenPaymasterConfig()
     let op = await fillUserOp({
       sender: account.address,
@@ -173,12 +183,9 @@ describe('TokenPaymaster', function () {
     expect(await entryPoint.handleOps([opPacked], beneficiaryAddress, { gasLimit: 1e7 })
       .catch(e => decodeRevertReason(e)))
       .to.match(/TPM: postOpGasLimit too low/)
-
-    await ethers.provider.send('evm_revert', [snapshot])
   })
 
   it('paymaster should reject if account does not have enough tokens or allowance', async () => {
-    const snapshot = await ethers.provider.send('evm_snapshot', [])
     let op = await fillUserOp({
       sender: account.address,
       paymaster: paymasterAddress,
@@ -198,12 +205,9 @@ describe('TokenPaymaster', function () {
     expect(await entryPoint.handleOps([opPacked], beneficiaryAddress, { gasLimit: 1e7 })
       .catch(e => decodeRevertReason(e)))
       .to.match(/FailedOpWithRevert\(0,"AA33 reverted",ERC20InsufficientBalance/)
-
-    await ethers.provider.send('evm_revert', [snapshot])
   })
 
   it('should be able to sponsor the UserOp while charging correct amount of ERC-20 tokens', async () => {
-    const snapshot = await ethers.provider.send('evm_snapshot', [])
     await token.transfer(account.address, parseEther('1'))
     await token.sudoApprove(account.address, paymaster.address, ethers.constants.MaxUint256)
 
@@ -250,12 +254,10 @@ describe('TokenPaymaster', function () {
     assert.equal(actualTokenChargeEvents.toString(), actualTokenCharge.toString())
     assert.equal(actualTokenChargeEvents.toString(), expectedTokenCharge.toString())
     assert.equal(actualTokenPriceWithMarkup.toString(), expectedTokenPriceWithMarkup.toString())
-    assert.closeTo(postOpGasCost.div(tx.effectiveGasPrice).toNumber(), 50000, 20000)
-    await ethers.provider.send('evm_revert', [snapshot])
+    assert.closeTo(postOpGasCost.div(tx.effectiveGasPrice).toNumber(), BigNumber.from(op.paymasterPostOpGasLimit).toNumber(), 20000)
   })
 
   it('should update cached token price if the change is above configured percentage', async function () {
-    const snapshot = await ethers.provider.send('evm_snapshot', [])
     await token.transfer(account.address, parseEther('1'))
     await token.sudoApprove(account.address, paymaster.address, ethers.constants.MaxUint256)
     await tokenOracle.setPrice(initialPriceToken * 5)
@@ -289,12 +291,9 @@ describe('TokenPaymaster', function () {
     await expect(tx).to
       .emit(paymaster, 'TokenPriceUpdated')
       .withArgs(newExpectedPrice, oldExpectedPrice, block.timestamp)
-
-    await ethers.provider.send('evm_revert', [snapshot])
   })
 
   it('should use token price supplied by the client if it is better than cached', async function () {
-    const snapshot = await ethers.provider.send('evm_snapshot', [])
     await token.transfer(account.address, parseEther('1'))
     await token.sudoApprove(account.address, paymaster.address, ethers.constants.MaxUint256)
 
@@ -334,11 +333,9 @@ describe('TokenPaymaster', function () {
 
     // TODO: div 1e10 to hide rounding errors. look into it - 1e10 is too much.
     assert.equal(preChargeTokenPrice.div(1e10).toString(), overrideTokenPrice.div(1e10).toString())
-    await ethers.provider.send('evm_revert', [snapshot])
   })
 
   it('should use cached token price if the one supplied by the client is worse', async function () {
-    const snapshot = await ethers.provider.send('evm_snapshot', [])
     await token.transfer(account.address, parseEther('1'))
     await token.sudoApprove(account.address, paymaster.address, ethers.constants.MaxUint256)
 
@@ -378,11 +375,9 @@ describe('TokenPaymaster', function () {
     const preChargeTokenPrice = requiredPrefund.mul(priceDenominator).div(preChargeTokens)
 
     assert.equal(preChargeTokenPrice.toString(), currentCachedPrice.mul(10).div(15).toString())
-    await ethers.provider.send('evm_revert', [snapshot])
   })
 
   it('should charge the overdraft tokens if the pre-charge ended up lower than the final transaction cost', async function () {
-    const snapshot = await ethers.provider.send('evm_snapshot', [])
     await token.transfer(account.address, await token.balanceOf(await ethersSigner.getAddress()))
     await token.sudoApprove(account.address, paymaster.address, ethers.constants.MaxUint256)
 
@@ -420,14 +415,10 @@ describe('TokenPaymaster', function () {
 
     const userOpSuccess = decodedLogs[5].args.success
     assert.equal(userOpSuccess, true)
-    await ethers.provider.send('evm_revert', [snapshot])
   })
 
   it('should revert in the first postOp run if the pre-charge ended up lower than the final transaction cost but the client has no tokens to cover the overdraft', async function () {
-    const snapshot = await ethers.provider.send('evm_snapshot', [])
-
-    // Make sure account has small amount of tokens
-    await token.transfer(account.address, parseEther('0.01'))
+    await token.transfer(account.address, parseEther('0.5'))
     await token.sudoApprove(account.address, paymaster.address, ethers.constants.MaxUint256)
 
     // Ether price increased 100 times!
@@ -436,8 +427,8 @@ describe('TokenPaymaster', function () {
     // Cannot happen too fast though
     await ethers.provider.send('evm_increaseTime', [200])
 
-    // Withdraw most of the tokens the account hs inside the inner transaction
-    const withdrawTokensCall = await token.populateTransaction.transfer(token.address, parseEther('0.009')).then(tx => tx.data!)
+    // Validation can precharge, but the transfer leaves too little to settle at the new price.
+    const withdrawTokensCall = await token.populateTransaction.transfer(token.address, parseEther('0.48')).then(tx => tx.data!)
     const callData = await account.populateTransaction.execute(token.address, 0, withdrawTokensCall).then(tx => tx.data!)
 
     let op = await fillUserOp({
@@ -463,7 +454,6 @@ describe('TokenPaymaster', function () {
     const userOpSuccess = decodedLogs[3].args.success
     assert.equal(userOpSuccess, false)
     assert.equal(decodedLogs.length, 4)
-    await ethers.provider.send('evm_revert', [snapshot])
   })
 
   it('should swap tokens for ether if it falls below configured value and deposit it', async function () {
