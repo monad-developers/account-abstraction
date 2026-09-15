@@ -6,7 +6,7 @@ import {
   TokenPaymaster__factory
 } from '../typechain'
 import { ethers } from 'hardhat'
-import { GasCheckCollector, GasChecker } from './GasChecker'
+import { GasCheckCollector, GasChecker, waitForTransaction } from './GasChecker'
 import { Create2Factory } from '../src/Create2Factory'
 import { hexValue } from '@ethersproject/bytes'
 import {
@@ -28,7 +28,7 @@ context('Token Paymaster', function () {
     const create2Factory = new Create2Factory(ethers.provider, globalSigner)
 
     const ethersSigner = createAccountOwner()
-    await globalSigner.sendTransaction({ to: ethersSigner.getAddress(), value: parseEther('10') })
+    await globalSigner.sendTransaction({ to: ethersSigner.getAddress(), value: parseEther('10') }).then(waitForTransaction)
 
     const minEntryPointBalance = 1e17.toString()
     const initialPriceToken = 100000000 // USD per TOK
@@ -87,15 +87,15 @@ context('Token Paymaster', function () {
     ).data!)
     paymasterAddress = await create2Factory.deploy(paymasterInit, 0)
     const paymaster = TokenPaymaster__factory.connect(paymasterAddress, ethersSigner)
-    await paymaster.addStake(1, { value: 1 })
-    await g.entryPoint().depositTo(paymaster.address, { value: parseEther('10') })
-    await paymaster.updateCachedPrice(true)
+    await paymaster.addStake(1, { value: 1 }).then(waitForTransaction)
+    await g.entryPoint().depositTo(paymaster.address, { value: parseEther('10') }).then(waitForTransaction)
+    await paymaster.updateCachedPrice(true).then(waitForTransaction)
     await g.createAccounts1(11)
-    await token.sudoMint(await ethersSigner.getAddress(), parseEther('20'))
-    await token.transfer(paymaster.address, parseEther('0.1'))
+    await token.sudoMint(await ethersSigner.getAddress(), parseEther('20')).then(waitForTransaction)
+    await token.transfer(paymaster.address, parseEther('0.1')).then(waitForTransaction)
     for (const address of g.createdAccounts) {
-      await token.transfer(address, parseEther('1'))
-      await token.sudoApprove(address, paymaster.address, ethers.constants.MaxUint256)
+      await token.transfer(address, parseEther('1')).then(waitForTransaction)
+      await token.sudoApprove(address, paymaster.address, ethers.constants.MaxUint256).then(waitForTransaction)
     }
 
     console.log('==addresses:', {

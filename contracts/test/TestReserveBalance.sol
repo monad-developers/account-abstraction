@@ -29,6 +29,7 @@ contract TestReservePaymaster is BasePaymaster {
     uint256 public postOpCalls;
     PostOpMode public lastMode;
     uint256 public settledGasCost;
+    uint256 public gasToBurn;
 
     constructor(IEntryPoint ep, address payable target, Action postOpAction, bool validationDip)
         payable BasePaymaster(ep)
@@ -36,6 +37,10 @@ contract TestReservePaymaster is BasePaymaster {
         recipient = target;
         action = postOpAction;
         dipDuringValidation = validationDip;
+    }
+
+    function setGasToBurn(uint256 amount) external {
+        gasToBurn = amount;
     }
 
     function _validatePaymasterUserOp(PackedUserOperation calldata, bytes32, uint256)
@@ -53,6 +58,12 @@ contract TestReservePaymaster is BasePaymaster {
         postOpCalls++;
         lastMode = mode;
         settledGasCost = actualGasCost;
+        uint256 burn = gasToBurn;
+        assembly ("memory-safe") {
+            let gasFloor := sub(gas(), burn)
+            // solhint-disable-next-line no-empty-blocks
+            for {} gt(gas(), gasFloor) {} {}
+        }
         if (action == Action.Dip) {
             recipient.transfer(1);
         } else if (action == Action.Revert) {

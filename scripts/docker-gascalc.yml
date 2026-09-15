@@ -3,7 +3,8 @@ services:
     image: node:24
     container_name: gascalc
     depends_on:
-      - localgeth
+      localgeth:
+        condition: service_healthy
     volumes:
       - ..:/app
     working_dir: /app
@@ -15,6 +16,12 @@ services:
   localgeth:
     ports: [ '8545:8545' ]
     image: ethereum/client-go:release-1.14
+    healthcheck:
+      test: ["CMD", "geth", "attach", "--exec", "eth.blockNumber", "http://127.0.0.1:8545"]
+      interval: 2s
+      timeout: 5s
+      start_period: 10s
+      retries: 30
     volumes:
       - ./geth-genesis.json:/genesis.json:ro
     entrypoint: sh

@@ -750,6 +750,77 @@ describe('EntryPoint', function () {
           }
         }
 
+        for (const accountDips of [false, true]) {
+          for (const callGasLimit of [100_000, 1_000_000]) {
+            for (const [action, label] of [[1, 'violates reserves'], [2, 'reverts'], [3, 'runs out of gas']] as const) {
+              it(`charges a failed ${accountDips ? 'recovery' : 'normal'} postOp allowance only once when it ${label}, call limit ${callGasLimit}`, async () => {
+                const paymaster = await new TestReservePaymaster__factory(ethersSigner)
+                  .deploy(entryPoint.address, reserveRecipient, action, false, { value: 1 })
+                await entryPoint.depositTo(paymaster.address, { value: ONE_ETH })
+                const paymasterPostOpGasLimit = 600_000
+                const preVerificationGas = 60_000
+                const minimumExecutionCharge = callGasLimit + paymasterPostOpGasLimit + preVerificationGas
+
+                async function execute (gasToBurn: number): Promise<{ charge: BigNumber, gasUsed: BigNumber, prefund: BigNumber, prefundFailures: number }> {
+                  const snapshot = await ethers.provider.send('evm_snapshot', [])
+                  try {
+                    await paymaster.setGasToBurn(gasToBurn)
+                    const depositBefore = await entryPoint.balanceOf(paymaster.address)
+                    const countBefore = await counter.counters(account.address)
+                    const op1 = await countOp({
+                      callData: accountDips ? await dipCallData() : accountExecFromEntryPoint.data,
+                      verificationGasLimit: 200_000,
+                      callGasLimit,
+                      preVerificationGas,
+                      paymaster: paymaster.address,
+                      paymasterVerificationGasLimit: 100_000,
+                      paymasterPostOpGasLimit
+                    })
+                    const op2 = await countOp({ nonce: BigNumber.from(op1.nonce).add(1) })
+                    const beneficiary = createAddress()
+                    const receipt = await entryPoint.handleOps([op1, op2], beneficiary, { gasLimit: 10_000_000 })
+                      .then(async tx => tx.wait())
+                    const events = receipt.events?.filter(event => event.event === 'UserOperationEvent') as UserOperationEventEvent[]
+                    const charge = events[0].args.actualGasCost
+                    const prefund = requiredPrefund(op1).add(100_000).add(paymasterPostOpGasLimit)
+                    expect(events.map(event => event.args.success)).to.eql([false, true])
+                    expect(charge).to.be.gte(minimumExecutionCharge)
+                    expect(depositBefore.sub(await entryPoint.balanceOf(paymaster.address))).to.equal(charge)
+                    expect(await ethers.provider.getBalance(beneficiary)).to.equal(charge.add(events[1].args.actualGasCost))
+                    expect(await counter.counters(account.address)).to.equal(countBefore.add(1))
+                    expect(await entryPoint.getNonce(account.address, 0)).to.equal(BigNumber.from(op1.nonce).add(2))
+                    expect(await paymaster.postOpCalls()).to.equal(0)
+                    expect(await ethers.provider.getBalance(paymaster.address)).to.equal(1)
+                    expect(await ethers.provider.getBalance(reserveRecipient)).to.equal(0)
+                    expect(receipt.events?.filter(event => event.event === 'UserOperationReserveBalanceViolated'))
+                      .to.have.lengthOf(accountDips || action === 1 ? 1 : 0)
+                    return {
+                      charge,
+                      gasUsed: events[0].args.actualGasUsed,
+                      prefund,
+                      prefundFailures: receipt.events?.filter(event => event.event === 'UserOperationPrefundTooLow').length ?? 0
+                    }
+                  } finally {
+                    await ethers.provider.send('evm_revert', [snapshot])
+                  }
+                }
+
+                const results = [await execute(0)]
+                if (action !== 3) {
+                  results.push(await execute(400_000))
+                  // Both callbacks reserve the same execution and postOp allowances at 100%.
+                  expect(results[1].charge.sub(results[0].charge).toNumber()).to.be.closeTo(0, 10_000)
+                }
+                for (const result of results) {
+                  expect(result.prefundFailures).to.equal(0)
+                  expect(result.charge).to.be.lt(result.prefund)
+                  expect(result.charge).to.equal(result.gasUsed)
+                }
+              })
+            }
+          }
+        }
+
         for (const actor of ['account', 'paymaster']) {
           for (const route of ['ordinary', 'aggregated', 'simulation']) {
             it(`should reject ${actor} validation reserve dips through ${route}`, async () => {

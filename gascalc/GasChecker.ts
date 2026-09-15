@@ -12,7 +12,7 @@ import {
   EntryPoint, EntryPoint__factory, SimpleAccountFactory,
   SimpleAccountFactory__factory, SimpleAccount__factory
 } from '../typechain'
-import { BigNumberish, Wallet } from 'ethers'
+import { BigNumberish, ContractReceipt, ContractTransaction, Wallet } from 'ethers'
 import hre from 'hardhat'
 import { fillSignAndPack, fillUserOp, packUserOp, signUserOp } from '../test/UserOp'
 import { TransactionReceipt } from '@ethersproject/abstract-provider'
@@ -36,6 +36,15 @@ const getBalance = hre.ethers.provider.getBalance
 
 function range (n: number): number[] {
   return Array(n).fill(0).map((val, index) => index)
+}
+
+export async function waitForTransaction (tx: ContractTransaction): Promise<ContractReceipt> {
+  // Geth dev mines immediately; wait for receipt indexing before ethers starts block polling.
+  for (let count = 0; count < 100; count++) {
+    if (await provider.getTransactionReceipt(tx.hash) != null) break
+    await new Promise(resolve => setTimeout(resolve, 10))
+  }
+  return await tx.wait()
 }
 
 interface GasTestInfo {
@@ -257,12 +266,7 @@ export class GasChecker {
       throw e
     })
     const ret = await GasCheckCollector.inst.entryPoint.handleOps(userOps, info.beneficiary, { gasLimit: gasEst.mul(3).div(2) })
-    // Geth dev mines immediately; wait for receipt indexing before ethers starts block polling.
-    for (let count = 0; count < 100; count++) {
-      if (await provider.getTransactionReceipt(ret.hash) != null) break
-      await new Promise(resolve => setTimeout(resolve, 10))
-    }
-    const rcpt = await ret.wait()
+    const rcpt = await waitForTransaction(ret)
     const gasUsed = rcpt.gasUsed.toNumber()
     const countSuccessOps = rcpt.events?.filter(e => e.event === 'UserOperationEvent' && e.args?.success === true).length
     expect(rcpt.events?.filter(e => e.event === 'UserOperationReserveBalanceViolated'))
