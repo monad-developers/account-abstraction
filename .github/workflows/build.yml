@@ -17,11 +17,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/setup-node@v1
+      - uses: actions/setup-node@v4
         with:
-          node-version: '16'
-      - uses: actions/checkout@v1
-      - uses: actions/cache@v2
+          node-version: '22'
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
         with:
           path: node_modules
           key: ${{ runner.os }}-${{ hashFiles('yarn.lock') }}
@@ -33,16 +33,13 @@ jobs:
 
   gas-checks:
     runs-on: ubuntu-latest
-    services:
-      localgeth:
-        image: dtr22/geth-dev
 
     steps:
-      - uses: actions/setup-node@v1
+      - uses: actions/setup-node@v4
         with:
-          node-version: '16'
-      - uses: actions/checkout@v1
-      - uses: actions/cache@v2
+          node-version: '22'
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
         with:
           path: node_modules
           key: ${{ runner.os }}-${{ hashFiles('yarn.lock') }}
@@ -53,11 +50,11 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/setup-node@v1
+      - uses: actions/setup-node@v4
         with:
-          node-version: '16'
-      - uses: actions/checkout@v1
-      - uses: actions/cache@v2
+          node-version: '22'
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
         with:
           path: node_modules
           key: ${{ runner.os }}-${{ hashFiles('yarn.lock') }}
@@ -67,11 +64,11 @@ jobs:
   coverage:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/setup-node@v1
+      - uses: actions/setup-node@v4
         with:
-          node-version: '16'
-      - uses: actions/checkout@v1
-      - uses: actions/cache@v2
+          node-version: '22'
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
         with:
           path: node_modules
           key: ${{ runner.os }}-${{ hashFiles('yarn.lock') }}
@@ -80,7 +77,7 @@ jobs:
       - run: yarn compile
 
       - run: FORCE_COLOR=1 yarn coverage
-      - uses: actions/upload-artifact@v2
+      - uses: actions/upload-artifact@v4
         with:
           name: solidity-coverage
           path: |

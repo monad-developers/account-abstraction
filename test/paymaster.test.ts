@@ -22,7 +22,7 @@ import {
   createAddress,
   ONE_ETH,
   createAccount,
-  getAccountAddress, decodeRevertReason
+  getAccountAddress, decodeRevertReason, setDippedIntoReserve
 } from './testutils'
 import { fillSignAndPack, simulateValidation } from './UserOp'
 import { hexConcat, parseEther } from 'ethers/lib/utils'
@@ -48,6 +48,7 @@ describe('EntryPoint with paymaster', function () {
     this.timeout(20000)
     await checkForGeth()
 
+    await setDippedIntoReserve(false)
     entryPoint = await deployEntryPoint()
     factory = await new SimpleAccountFactory__factory(ethersSigner).deploy(entryPoint.address)
 

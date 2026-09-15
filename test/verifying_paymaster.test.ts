@@ -11,7 +11,7 @@ import {
   AddressZero,
   createAccount,
   createAccountOwner, createAddress, decodeRevertReason,
-  deployEntryPoint, packPaymasterData, parseValidationData
+  deployEntryPoint, packPaymasterData, parseValidationData, setDippedIntoReserve
 } from './testutils'
 import { DefaultsForUserOp, fillAndSign, fillSignAndPack, packUserOp, simulateValidation } from './UserOp'
 import { arrayify, defaultAbiCoder, hexConcat, parseEther } from 'ethers/lib/utils'
@@ -31,6 +31,7 @@ describe('EntryPoint with VerifyingPaymaster', function () {
   let paymaster: VerifyingPaymaster
   before(async function () {
     this.timeout(20000)
+    await setDippedIntoReserve(false)
     entryPoint = await deployEntryPoint()
 
     offchainSigner = createAccountOwner()

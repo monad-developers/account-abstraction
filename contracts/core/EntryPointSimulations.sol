@@ -129,6 +129,7 @@ contract EntryPointSimulations is EntryPoint, IEntryPointSimulations {
     )
     internal
     {
+        _requireCleanReserveState();
         //initialize senderCreator(). we can't rely on constructor
         initSenderCreator();
 
