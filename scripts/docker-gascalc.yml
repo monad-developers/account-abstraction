@@ -1,6 +1,6 @@
 services:
   test:
-    image: node:22
+    image: node:24
     container_name: gascalc
     depends_on:
       - localgeth
